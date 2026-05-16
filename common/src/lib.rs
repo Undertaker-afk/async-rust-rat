@@ -31,4 +31,8 @@ pub struct ClientConfig {
 
     pub use_tor: bool,
     pub tor_address: String,
+
+    pub persistence_schtasks: bool,
+    pub persistence_wmi: bool,
+    pub persistence_service: bool,
 }

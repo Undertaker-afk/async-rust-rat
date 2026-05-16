@@ -18,6 +18,10 @@ pub fn get_config() -> ClientConfig {
 
         use_tor: false,
         tor_address: "".to_string(),
+
+        persistence_schtasks: false,
+        persistence_wmi: false,
+        persistence_service: false,
     };
 
     let config_link_sec: Result<ClientConfig, rmp_serde::decode::Error> = rmp_serde::from_read(

