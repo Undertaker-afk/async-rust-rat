@@ -7,4 +7,4 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-winapi = { version = "0.3", features = ["winnt", "minwindef"] }
+winapi = { version = "0.3", features = ["winnt", "minwindef", "winbase", "jobapi2"] }

