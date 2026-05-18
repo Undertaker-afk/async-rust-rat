@@ -13,6 +13,7 @@ use rsa::{RsaPrivateKey, RsaPublicKey};
 
 use crate::commands::*;
 use anyhow::{Context, Result};
+use nostr_sdk::prelude::*;
 use common::packets::*;
 use common::RSA_BITS;
 
@@ -317,6 +318,24 @@ impl ServerWrapper {
                         .await
                 }
 
+                StartHighSpeedRemoteDesktop(addr, config) => {
+                    if let Some(client) = self.connected_users.get(&addr) {
+                        let ticket = crate::utils::iroh_service::get_connection_ticket().await;
+                        let room = format!("rdp_{}", addr.to_string().replace(":", "_"));
+
+                        // Negotiate DERP relay via Nostr DM before starting
+                        if let Ok(client_pubkey) = PublicKey::from_hex(&client.data.public_key) {
+                            let _ = crate::utils::iroh_service::negotiate_best_relay(addr.to_string(), client_pubkey).await;
+                        }
+
+                        self.handle_command(&addr, ClientboundPacket::StartHighSpeedRemoteDesktop {
+                            ticket,
+                            room,
+                            config,
+                        }).await;
+                    }
+                }
+
                 StopRemoteDesktop(addr) => {
                     self.handle_command(&addr, ClientboundPacket::StopRemoteDesktop)
                         .await;
@@ -452,6 +471,31 @@ impl ServerWrapper {
                             .await;
                         self.send_client_packet(&addr, ClientboundPacket::StartHVNC)
                             .await
+                    }
+                }
+                StartHighSpeedHVNC(addr) => {
+                    if let Some(client) = self.connected_users.get(&addr) {
+                        let ticket = crate::utils::iroh_service::get_connection_ticket().await;
+                        let room = format!("speedyvnc_{}", addr.to_string().replace(":", "_"));
+
+                        // Negotiate DERP relay via Nostr DM before starting
+                        if let Ok(client_pubkey) = PublicKey::from_hex(&client.data.public_key) {
+                            let _ = crate::utils::iroh_service::negotiate_best_relay(addr.to_string(), client_pubkey).await;
+                        }
+
+                        self.log_events
+                            .log(
+                                "cmd_sent",
+                                format!(
+                                    "Starting High-Speed HVNC on client [{}] [{}]",
+                                    addr, client.system.username
+                                ),
+                            )
+                            .await;
+                        self.send_client_packet(&addr, ClientboundPacket::StartHighSpeedHVNC {
+                            ticket,
+                            room,
+                        }).await;
                     }
                 }
                 StopHVNC(addr) => {

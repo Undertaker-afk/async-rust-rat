@@ -267,9 +267,10 @@ export const startRemoteDesktopCmd = async (
   addr: string | undefined,
   display: number,
   quality: number,
-  fps: number
+  fps: number,
+  highSpeed: boolean = false
 ): Promise<void> => {
-  return invoke("start_remote_desktop", { addr, display, quality, fps });
+  return invoke("start_remote_desktop", { addr, display, quality, fps, highSpeed });
 };
 
 export const stopRemoteDesktopCmd = async (
@@ -439,9 +440,10 @@ export const sendMouseClickCmd = async (
 
 export const manageHVNC = async (
   addr: string | undefined,
-  run: string
+  run: string,
+  highSpeed: boolean = false
 ): Promise<void> => {
-  return invoke("manage_hvnc", { addr, run });
+  return invoke("manage_hvnc", { addr, run, highSpeed });
 };
 
 export const startHVNCFrameAudioCmd = async (

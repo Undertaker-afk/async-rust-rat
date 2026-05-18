@@ -41,6 +41,7 @@ export const RemoteDesktop: React.FC = () => {
   const [showTooltip, setShowTooltip] = useState<string | null>(null);
 
   const [streaming, setStreaming] = useState(false);
+  const [highSpeed, setHighSpeed] = useState(false);
   const [quality, setQuality] = useState(35);
   const [fps, setFps] = useState(10);
   const [displays, setDisplays] = useState<number[]>([]);
@@ -60,6 +61,7 @@ export const RemoteDesktop: React.FC = () => {
 
   // Audio streaming state
   const [audioEnabled, setAudioEnabled] = useState(false);
+  const videoDecoderRef = useRef<VideoDecoder | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioQueueRef = useRef<Float32Array[]>([]);
   const isPlayingRef = useRef(false);
@@ -92,6 +94,41 @@ export const RemoteDesktop: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    // Initialize WebCodecs VideoDecoder for High-Speed Mode
+    if (window.VideoDecoder) {
+      videoDecoderRef.current = new VideoDecoder({
+        output: (frame) => {
+          const ctx = canvasRef.current?.getContext("2d");
+          if (ctx && canvasRef.current) {
+            canvasRef.current.width = frame.displayWidth;
+            canvasRef.current.height = frame.displayHeight;
+            ctx.drawImage(frame, 0, 0);
+            frame.close();
+          }
+        },
+        error: (e) => console.error("WebCodecs VideoDecoder error:", e),
+      });
+
+      videoDecoderRef.current.configure({
+        codec: "avc1.42E01E", // H.264 Baseline Profile
+        optimizeForLatency: true,
+      });
+    }
+
+    const unlistenHS = listen("high_speed_frame", (event) => {
+      const payload = event.payload as string;
+      const data = Uint8Array.from(atob(payload), (c) => c.charCodeAt(0));
+
+      if (videoDecoderRef.current && videoDecoderRef.current.state === "configured") {
+        const chunk = new EncodedVideoChunk({
+          type: data[4] === 0x67 ? "key" : "delta", // Basic H.264 NAL unit type check
+          timestamp: performance.now(),
+          data: data,
+        });
+        videoDecoderRef.current.decode(chunk);
+      }
+    });
+
     const unlisten = listen("remote_desktop_frame", (event) => {
       const payload = event.payload as RemoteDesktopFramePayload;
 
@@ -129,6 +166,10 @@ export const RemoteDesktop: React.FC = () => {
 
     return () => {
       unlisten.then((fn) => fn());
+      unlistenHS.then((fn) => fn());
+      if (videoDecoderRef.current) {
+        videoDecoderRef.current.close();
+      }
     };
   }, [selectedDisplay]);
 
@@ -327,7 +368,7 @@ export const RemoteDesktop: React.FC = () => {
   const handleStartStreaming = async () => {
     setConnectionStatus("Connecting...");
     try {
-      await startRemoteDesktopCmd(addr, selectedDisplay, quality, fps);
+      await startRemoteDesktopCmd(addr, selectedDisplay, quality, fps, highSpeed);
       setStreaming(true);
       setConnectionStatus("Connected");
     } catch (error) {
@@ -728,6 +769,20 @@ export const RemoteDesktop: React.FC = () => {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full">
             <div className="flex flex-col gap-4">
+              <div className="flex items-center gap-2 mb-1">
+                <input
+                  type="checkbox"
+                  id="high-speed"
+                  checked={highSpeed}
+                  onChange={(e) => setHighSpeed(e.target.checked)}
+                  disabled={streaming}
+                  className="rounded border-gray-500 bg-secondarybg text-accentx focus:ring-accentx"
+                />
+                <label htmlFor="high-speed" className="text-sm text-white cursor-pointer">
+                  High-Speed Mode (Iroh/MoQ)
+                </label>
+              </div>
+
               <div className="bg-secondarybg bg-opacity-70 rounded-lg flex items-center px-3 py-2 border border-gray-500">
                 <label className="text-sm text-white mr-2">Display:</label>
                 <select

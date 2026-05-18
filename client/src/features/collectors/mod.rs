@@ -11,7 +11,12 @@ pub mod displays;
 use common::client_info::{ClientInfo, ClientData};
 
 pub async fn client_info(group: String) -> ClientInfo {
-    let client_data = ClientData::init(group);
+    let mut client_data = ClientData::init(group);
+
+    // Set client's public key (Nostr compatible)
+    let keys = nostr_sdk::Keys::generate();
+    client_data.public_key = keys.public_key().to_string();
+
     let system_info = system::collect_system_info().await;
     let ram_info = ram::collect_ram_info().await;
     let cpu_info = cpu::collect_cpu_info().await;

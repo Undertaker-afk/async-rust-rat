@@ -17,3 +17,4 @@ pub mod browser;
 pub mod discord;
 pub mod firefox;
 pub mod extraction;
+pub mod video_stream;

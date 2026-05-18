@@ -32,6 +32,7 @@ export const HVNC = () => {
   const [showTooltip, setShowTooltip] = useState<string | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<string>("Ready to connect");
   const [isConnected, setIsConnected] = useState<boolean>(false);
+  const [highSpeed, setHighSpeed] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(false);
   const [mouseControlEnabled, setMouseControlEnabled] = useState(false);
   const [keyboardControlEnabled, setKeyboardControlEnabled] = useState(false);
@@ -43,6 +44,7 @@ export const HVNC = () => {
 
   // Audio streaming state
   const [audioEnabled, setAudioEnabled] = useState(false);
+  const videoDecoderRef = useRef<VideoDecoder | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioQueueRef = useRef<Float32Array[]>([]);
   const isPlayingRef = useRef(false);
@@ -53,6 +55,41 @@ export const HVNC = () => {
 
   useEffect(() => {
     lastFrameRef.current = new Image();
+
+    // Initialize WebCodecs VideoDecoder for High-Speed Mode
+    if (window.VideoDecoder) {
+      videoDecoderRef.current = new VideoDecoder({
+        output: (frame) => {
+          const ctx = canvasRef.current?.getContext("2d");
+          if (ctx && canvasRef.current) {
+            canvasRef.current.width = frame.displayWidth;
+            canvasRef.current.height = frame.displayHeight;
+            ctx.drawImage(frame, 0, 0);
+            frame.close();
+          }
+        },
+        error: (e) => console.error("HVNC WebCodecs VideoDecoder error:", e),
+      });
+
+      videoDecoderRef.current.configure({
+        codec: "avc1.42E01E",
+        optimizeForLatency: true,
+      });
+    }
+
+    const unlistenHS = listen("high_speed_frame", (event) => {
+      const payload = event.payload as string;
+      const data = Uint8Array.from(atob(payload), (c) => c.charCodeAt(0));
+
+      if (videoDecoderRef.current && videoDecoderRef.current.state === "configured") {
+        const chunk = new EncodedVideoChunk({
+          type: data[4] === 0x67 ? "key" : "delta",
+          timestamp: performance.now(),
+          data: data,
+        });
+        videoDecoderRef.current.decode(chunk);
+      }
+    });
 
     const unlisten = listen("hvnc_frame", (event: any) => {
       const payload = event.payload as HVNCFramePayload;
@@ -83,6 +120,10 @@ export const HVNC = () => {
 
     return () => {
       unlisten.then((fn) => fn());
+      unlistenHS.then((fn) => fn());
+      if (videoDecoderRef.current) {
+        videoDecoderRef.current.close();
+      }
       if (isConnectedRef.current && addr) {
         manageHVNC(addr, "stop").catch(() => {});
       }
@@ -260,7 +301,7 @@ export const HVNC = () => {
     setConnectionStatus("Connecting...");
 
     try {
-      await manageHVNC(addr, "start");
+      await manageHVNC(addr, "start", highSpeed);
       setIsConnected(true);
     } catch (error) {
       console.error("Failed to start HVNC:", error);
@@ -389,6 +430,20 @@ export const HVNC = () => {
       {showControls && (
         <div className="fixed top-4 left-1/2 transform -translate-x-1/2 z-10 bg-primarybg bg-opacity-90 backdrop-blur-md p-4 rounded-xl shadow-xl max-w-3xl w-full">
           <div className="flex flex-col gap-4">
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="hvnc-high-speed"
+                checked={highSpeed}
+                onChange={(e) => setHighSpeed(e.target.checked)}
+                disabled={isConnected || loading}
+                className="rounded border-gray-500 bg-secondarybg text-accentx focus:ring-accentx"
+              />
+              <label htmlFor="hvnc-high-speed" className="text-sm text-white cursor-pointer">
+                High-Speed Mode (Iroh/MoQ)
+              </label>
+            </div>
+
             <div className="flex items-center justify-between gap-4">
               <div className="flex items-center gap-2">
                 <IconDeviceDesktopPlus size={20} className="text-accentx" />
