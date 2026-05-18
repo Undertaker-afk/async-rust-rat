@@ -50,8 +50,8 @@ jobs:
       - name: Prepare Release Artifacts
         run: |
           mkdir release_artifacts
-          copy "server\src-tauri\target\release\bundle\msi\*.msi" release_artifacts\
-          copy "server\src-tauri\target\release\*.exe" release_artifacts\
+          copy "target\release\bundle\msi\*.msi" release_artifacts\
+          copy "target\release\*.exe" release_artifacts\
         shell: cmd
 
       - name: Create GitHub Release
