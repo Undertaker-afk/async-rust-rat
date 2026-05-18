@@ -32,6 +32,7 @@ export const HVNC = () => {
   const [showTooltip, setShowTooltip] = useState<string | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<string>("Ready to connect");
   const [isConnected, setIsConnected] = useState<boolean>(false);
+  const [highSpeed, setHighSpeed] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(false);
   const [mouseControlEnabled, setMouseControlEnabled] = useState(false);
   const [keyboardControlEnabled, setKeyboardControlEnabled] = useState(false);
@@ -260,7 +261,7 @@ export const HVNC = () => {
     setConnectionStatus("Connecting...");
 
     try {
-      await manageHVNC(addr, "start");
+      await manageHVNC(addr, "start", highSpeed);
       setIsConnected(true);
     } catch (error) {
       console.error("Failed to start HVNC:", error);
@@ -389,6 +390,20 @@ export const HVNC = () => {
       {showControls && (
         <div className="fixed top-4 left-1/2 transform -translate-x-1/2 z-10 bg-primarybg bg-opacity-90 backdrop-blur-md p-4 rounded-xl shadow-xl max-w-3xl w-full">
           <div className="flex flex-col gap-4">
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                id="hvnc-high-speed"
+                checked={highSpeed}
+                onChange={(e) => setHighSpeed(e.target.checked)}
+                disabled={isConnected || loading}
+                className="rounded border-gray-500 bg-secondarybg text-accentx focus:ring-accentx"
+              />
+              <label htmlFor="hvnc-high-speed" className="text-sm text-white cursor-pointer">
+                High-Speed Mode (Iroh/MoQ)
+              </label>
+            </div>
+
             <div className="flex items-center justify-between gap-4">
               <div className="flex items-center gap-2">
                 <IconDeviceDesktopPlus size={20} className="text-accentx" />

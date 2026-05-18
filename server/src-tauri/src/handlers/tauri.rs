@@ -479,10 +479,20 @@ pub async fn start_remote_desktop(
     display: i32,
     quality: u8,
     fps: u8,
+    high_speed: bool,
     tauri_state: State<'_, SharedTauriState>,
     app_handle: AppHandle,
 ) -> Result<String, String> {
-    send_server_command(
+    let command = if high_speed {
+        ServerCommand::StartHighSpeedRemoteDesktop(
+            addr.parse().unwrap(),
+            RemoteDesktopConfig {
+                display,
+                quality,
+                fps,
+            },
+        )
+    } else {
         ServerCommand::StartRemoteDesktop(
             addr.parse().unwrap(),
             RemoteDesktopConfig {
@@ -490,11 +500,10 @@ pub async fn start_remote_desktop(
                 quality,
                 fps,
             },
-        ),
-        tauri_state,
-        app_handle,
-    )
-    .await?;
+        )
+    };
+
+    send_server_command(command, tauri_state, app_handle).await?;
 
     Ok("Remote desktop started".to_string())
 }
@@ -1413,13 +1422,19 @@ pub async fn request_webcam(
 pub async fn manage_hvnc(
     addr: &str,
     run: &str,
+    high_speed: Option<bool>,
     tauri_state: State<'_, SharedTauriState>,
     app_handle: AppHandle,
 ) -> Result<String, String> {
     match run {
         "start" => {
+            let command = if high_speed.unwrap_or(false) {
+                ServerCommand::StartHighSpeedHVNC(addr.parse().unwrap())
+            } else {
+                ServerCommand::StartHVNC(addr.parse().unwrap())
+            };
             send_server_command(
-                ServerCommand::StartHVNC(addr.parse().unwrap()),
+                command,
                 tauri_state,
                 app_handle,
             )

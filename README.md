@@ -33,7 +33,7 @@ For more images, see [IMAGES.md](IMAGES.md).
 - [x] Desktop Screenshot
 - [x] Webcam Capture
 - [ ] HVNC *(in development)*
-- [x] Remote Desktop
+- [x] Remote Desktop (Standard & High-Speed Iroh/MoQ)
 - [x] File Manager
 - [x] Reverse Shell
 - [x] Reverse Proxy

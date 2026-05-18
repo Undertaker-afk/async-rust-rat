@@ -51,3 +51,21 @@ Navigate to the server directory, open a command prompt, and run `npm run tauri 
 # Working on the code
 
 If you prefer to skip the compilation process and run both the server and client projects immediately, use the `cargo run` command with the same parameters as the build command. For the server project, since the front-end is a Node.js project, run it in development mode for hot reloading (useful if making changes to the front-end) by navigating to the server folder and executing `npm run dev`.
+
+# High-Performance Video Streaming (Iroh & MoQ)
+
+This project uses **Iroh** and **Media over QUIC (MoQ)** for low-latency, NAT-penetrating video streaming in Remote Desktop and HVNC.
+
+### How it works:
+1.  **Iroh**: Provides end-to-end encrypted P2P connectivity, automatically handling NAT traversal using public DERP relays.
+2.  **MoQ**: A modern media transport protocol that avoids Head-of-Line blocking, ensuring the video stream remains smooth even on flaky connections.
+
+### Setup (Important for Developers/Operators):
+To use the high-performance mode, both the client and server must be able to initialize an Iroh endpoint.
+
+By default, the server uses a pre-configured Iroh Service API Secret for discovery and relaying. If you wish to use your own private Iroh infrastructure or a different secret, you can set the following environment variable before starting the server:
+
+`export IROH_SERVICES_API_SECRET=your_secret_here`
+
+### Using High-Speed Mode:
+In the **Remote Desktop** or **HVNC** panels, simply check the **"High-Speed Mode (Iroh/MoQ)"** checkbox before clicking "Start". The server will automatically negotiate a P2P ticket with the client and transition to the high-performance stream. If P2P establishment fails, it will gracefully fall back to the standard C2-based JPEG streaming.

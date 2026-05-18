@@ -41,6 +41,7 @@ export const RemoteDesktop: React.FC = () => {
   const [showTooltip, setShowTooltip] = useState<string | null>(null);
 
   const [streaming, setStreaming] = useState(false);
+  const [highSpeed, setHighSpeed] = useState(false);
   const [quality, setQuality] = useState(35);
   const [fps, setFps] = useState(10);
   const [displays, setDisplays] = useState<number[]>([]);
@@ -327,7 +328,7 @@ export const RemoteDesktop: React.FC = () => {
   const handleStartStreaming = async () => {
     setConnectionStatus("Connecting...");
     try {
-      await startRemoteDesktopCmd(addr, selectedDisplay, quality, fps);
+      await startRemoteDesktopCmd(addr, selectedDisplay, quality, fps, highSpeed);
       setStreaming(true);
       setConnectionStatus("Connected");
     } catch (error) {
@@ -728,6 +729,20 @@ export const RemoteDesktop: React.FC = () => {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full">
             <div className="flex flex-col gap-4">
+              <div className="flex items-center gap-2 mb-1">
+                <input
+                  type="checkbox"
+                  id="high-speed"
+                  checked={highSpeed}
+                  onChange={(e) => setHighSpeed(e.target.checked)}
+                  disabled={streaming}
+                  className="rounded border-gray-500 bg-secondarybg text-accentx focus:ring-accentx"
+                />
+                <label htmlFor="high-speed" className="text-sm text-white cursor-pointer">
+                  High-Speed Mode (Iroh/MoQ)
+                </label>
+              </div>
+
               <div className="bg-secondarybg bg-opacity-70 rounded-lg flex items-center px-3 py-2 border border-gray-500">
                 <label className="text-sm text-white mr-2">Display:</label>
                 <select

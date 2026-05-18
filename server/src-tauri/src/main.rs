@@ -11,7 +11,16 @@ use handlers::{tauri::*, SharedTauriState, TauriState};
 
 #[tokio::main(worker_threads = 3)]
 async fn main() {
+    let _ = utils::iroh_service::init_iroh().await;
+
     tauri::Builder::default()
+        .setup(|app| {
+            let handle = app.handle().clone();
+            tokio::spawn(async move {
+                crate::utils::iroh_service::set_tauri_handle(handle).await;
+            });
+            Ok(())
+        })
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
