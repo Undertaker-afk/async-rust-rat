@@ -50,10 +50,8 @@ jobs:
       - name: Prepare Release Artifacts
         run: |
           mkdir release_artifacts
-          # Assuming the MSI installer is the primary output you want
           copy "server\src-tauri\target\release\bundle\msi\*.msi" release_artifacts\
-          # Also grab the standalone executable if needed
-          copy "server\src-tauri\target\release\server.exe" release_artifacts\
+          copy "server\src-tauri\target\release\*.exe" release_artifacts\
         shell: cmd
 
       - name: Create GitHub Release
