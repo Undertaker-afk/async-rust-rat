@@ -35,7 +35,8 @@
         "title": "RAT Server",
         "width": 1480,
         "height": 920,
-        "useHttpsScheme": true
+        "useHttpsScheme": true,
+        "create": false
       }
     ]
   }

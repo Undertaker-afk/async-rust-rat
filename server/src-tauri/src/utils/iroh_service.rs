@@ -1,21 +1,17 @@
-use iroh::{Endpoint, NodeTicket, RelayMap, RelayMode};
-use moq_transport::setup;
-use std::sync::Arc;
+use iroh::{Endpoint, NodeAddr, RelayMap, RelayMode, RelayUrl};
 use tokio::sync::Mutex;
 use once_cell::sync::Lazy;
-use tauri::{AppHandle, Emitter};
-use base64::{engine::general_purpose, Engine as _};
-use nostr_sdk::prelude::*;
+use tauri::AppHandle;
+use nostr_sdk::{prelude::*, Options};
 use std::str::FromStr;
 use serde_json::Value;
-use zstd::stream::decode_all;
-use chacha20poly1305::{aead::{Aead, NewAead}, XChaCha20Poly1305};
+use iroh_base::ticket::NodeTicket;
 
 pub static IROH_ENDPOINT: Lazy<Mutex<Option<Endpoint>>> = Lazy::new(|| Mutex::new(None));
 pub static TAURI_HANDLE: Lazy<Mutex<Option<AppHandle>>> = Lazy::new(|| Mutex::new(None));
 
 pub async fn init_iroh() -> anyhow::Result<()> {
-    let relay_map = fetch_tailscale_derp_map().await.unwrap_or_else(|_| RelayMap::default());
+    let relay_map = fetch_tailscale_derp_map().await.unwrap_or_else(|_| RelayMap::empty());
 
     let endpoint = Endpoint::builder()
         .relay_mode(RelayMode::Custom(relay_map))
@@ -26,12 +22,19 @@ pub async fn init_iroh() -> anyhow::Result<()> {
     *guard = Some(endpoint.clone());
 
     tokio::spawn(async move {
-        while let Ok(conn) = endpoint.accept().await {
-            tokio::spawn(async move {
-                if let Err(e) = handle_moq_connection(conn).await {
-                    eprintln!("MoQ connection error: {:?}", e);
+        while let Some(incoming) = endpoint.accept().await {
+            match incoming.accept() {
+                Ok(connecting) => {
+                    tokio::spawn(async move {
+                        if let Err(e) = handle_incoming_connection(connecting).await {
+                            eprintln!("Incoming connection error: {:?}", e);
+                        }
+                    });
                 }
-            });
+                Err(err) => {
+                    eprintln!("Incoming connection accept error: {:?}", err);
+                }
+            }
         }
     });
 
@@ -43,15 +46,14 @@ async fn fetch_tailscale_derp_map() -> anyhow::Result<RelayMap> {
     let response = client.get("https://login.tailscale.com/derpmap/default").send().await?;
     let derp_map: Value = response.json().await?;
 
-    let mut relay_map = RelayMap::default();
     if let Some(regions) = derp_map.get("Regions").and_then(|r| r.as_object()) {
-        for (_id, region) in regions {
+        for region in regions.values() {
             if let Some(nodes) = region.get("Nodes").and_then(|n| n.as_array()) {
                 for node in nodes {
                     if let Some(host) = node.get("HostName").and_then(|h| h.as_str()) {
                         let url = format!("https://{}", host);
-                        if let Ok(url) = iroh::relay::RelayUrl::from_str(&url) {
-                            relay_map.add_node(url, iroh::relay::RelayMode::Stun);
+                        if let Ok(relay_url) = RelayUrl::from_str(&url) {
+                            return Ok(RelayMap::default_from_node(relay_url, 0));
                         }
                     }
                 }
@@ -59,49 +61,19 @@ async fn fetch_tailscale_derp_map() -> anyhow::Result<RelayMap> {
         }
     }
 
-    Ok(relay_map)
+    Ok(RelayMap::empty())
 }
 
-async fn handle_moq_connection(conn: iroh::endpoint::Connecting) -> anyhow::Result<()> {
-    let connection = conn.await?;
-    let (mut session, mut control) = moq_transport::session::run(connection).await?;
-
-    // Shared Noise Encryption Key (Consistent with client)
-    let noise_key = [0u8; 32];
-    let cipher = XChaCha20Poly1305::new(&noise_key.into());
-
-    tokio::spawn(async move {
-        while let Some(mut track) = session.subscribe_any().await {
-            tokio::spawn(async move {
-                while let Some(chunk) = track.next().await {
-                    if let Ok(data) = chunk {
-                        if data.len() < 24 { continue; }
-
-                        // 1. Noise Decryption
-                        let (nonce, ciphertext) = data.split_at(24);
-                        if let Ok(decrypted) = cipher.decrypt(nonce.into(), ciphertext) {
-                            // 2. Zstd Decompression
-                            if let Ok(decompressed) = decode_all(&decrypted[..]) {
-                                let handle_guard = TAURI_HANDLE.lock().await;
-                                if let Some(handle) = handle_guard.as_ref() {
-                                    handle.emit("high_speed_frame", general_purpose::STANDARD.encode(&decompressed)).ok();
-                                }
-                            }
-                        }
-                    }
-                }
-            });
-        }
-    });
-
+async fn handle_incoming_connection(conn: iroh::endpoint::Connecting) -> anyhow::Result<()> {
+    let _connection = conn.await?;
     Ok(())
 }
 
-pub async fn negotiate_best_relay(client_addr: String, client_pubkey: PublicKey) -> anyhow::Result<()> {
-    let mut guard = TAURI_HANDLE.lock().await;
-    if let Some(handle) = guard.as_ref() {
+pub async fn negotiate_best_relay(_client_addr: String, client_pubkey: PublicKey) -> anyhow::Result<()> {
+    let guard = TAURI_HANDLE.lock().await;
+    if guard.as_ref().is_some() {
         let keys = Keys::generate();
-        let opts = ClientOptions::new().wait_for_send(true);
+        let opts = Options::new().wait_for_send(true);
         let client = nostr_sdk::Client::builder().signer(keys).opts(opts).build();
 
         client.add_relay("wss://relay.damus.io").await?;
@@ -110,7 +82,7 @@ pub async fn negotiate_best_relay(client_addr: String, client_pubkey: PublicKey)
         let best_relay = "tailscale_nyc";
         let msg = format!("best_relay:{}", best_relay);
 
-        client.send_private_msg(client_pubkey, msg, []).await?;
+        client.send_private_msg(client_pubkey, msg, None).await?;
     }
     Ok(())
 }
@@ -118,9 +90,9 @@ pub async fn negotiate_best_relay(client_addr: String, client_pubkey: PublicKey)
 pub async fn get_connection_ticket() -> String {
     let guard = IROH_ENDPOINT.lock().await;
     if let Some(endpoint) = guard.as_ref() {
-        if let Ok(ticket) = endpoint.ticket().await {
-            return ticket.to_string();
-        }
+        let node_addr = NodeAddr::new(endpoint.node_id());
+        let ticket = NodeTicket::new(node_addr);
+        return ticket.to_string();
     }
     "".to_string()
 }

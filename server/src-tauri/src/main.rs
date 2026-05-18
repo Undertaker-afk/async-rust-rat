@@ -19,6 +19,21 @@ async fn main() {
             tokio::spawn(async move {
                 crate::utils::iroh_service::set_tauri_handle(handle).await;
             });
+
+            let window_config = app
+                .config()
+                .app
+                .windows
+                .first()
+                .cloned()
+                .ok_or(tauri::Error::WindowNotFound)?;
+            let window_builder = tauri::window::WindowBuilder::from_config(app, &window_config)?;
+
+            #[cfg(windows)]
+            let window_builder = window_builder.drag_and_drop(false);
+
+            window_builder.build()?;
+
             Ok(())
         })
         .plugin(tauri_plugin_fs::init())

@@ -6,7 +6,7 @@ use tokio::sync::mpsc::{Receiver, Sender};
 
 use std::sync::{Arc, Mutex};
 
-use base64::{engine::general_purpose, Engine as _};
+use ::base64::{engine::general_purpose, Engine as _};
 use rsa::pkcs8::EncodePublicKey;
 use rsa::rand_core::OsRng;
 use rsa::{RsaPrivateKey, RsaPublicKey};

@@ -38,6 +38,7 @@ rusqlite = { version = "0.36.0", features = ["bundled"] }
 reqwest = { version = "0.12", features = ["json", "multipart"] }
 tauri-plugin-fs = "2"
 iroh = "0.31"
+iroh-base = "0.31"
 moq-transport = "0.6"
 nostr-sdk = "0.32"
 zstd = "0.13"
