@@ -17,6 +17,7 @@ pub struct ClientInfo {
 #[derive(Debug, PartialEq, Clone, Deserialize, Serialize)]
 pub struct ClientData {
     pub uuidv4: Option<String>,
+    pub public_key: String,
     pub addr: Option<String>,
     pub reverse_proxy_port: String,
     pub disconnected: Option<bool>,
@@ -28,6 +29,7 @@ impl ClientData {
     pub fn init(group: String) -> Self {
         ClientData {
             uuidv4: None,
+            public_key: "".to_string(),
             addr: None,
             reverse_proxy_port: "".to_string(),
             disconnected: None,

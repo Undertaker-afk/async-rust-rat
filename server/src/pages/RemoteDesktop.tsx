@@ -61,6 +61,7 @@ export const RemoteDesktop: React.FC = () => {
 
   // Audio streaming state
   const [audioEnabled, setAudioEnabled] = useState(false);
+  const videoDecoderRef = useRef<VideoDecoder | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioQueueRef = useRef<Float32Array[]>([]);
   const isPlayingRef = useRef(false);
@@ -93,6 +94,41 @@ export const RemoteDesktop: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    // Initialize WebCodecs VideoDecoder for High-Speed Mode
+    if (window.VideoDecoder) {
+      videoDecoderRef.current = new VideoDecoder({
+        output: (frame) => {
+          const ctx = canvasRef.current?.getContext("2d");
+          if (ctx && canvasRef.current) {
+            canvasRef.current.width = frame.displayWidth;
+            canvasRef.current.height = frame.displayHeight;
+            ctx.drawImage(frame, 0, 0);
+            frame.close();
+          }
+        },
+        error: (e) => console.error("WebCodecs VideoDecoder error:", e),
+      });
+
+      videoDecoderRef.current.configure({
+        codec: "avc1.42E01E", // H.264 Baseline Profile
+        optimizeForLatency: true,
+      });
+    }
+
+    const unlistenHS = listen("high_speed_frame", (event) => {
+      const payload = event.payload as string;
+      const data = Uint8Array.from(atob(payload), (c) => c.charCodeAt(0));
+
+      if (videoDecoderRef.current && videoDecoderRef.current.state === "configured") {
+        const chunk = new EncodedVideoChunk({
+          type: data[4] === 0x67 ? "key" : "delta", // Basic H.264 NAL unit type check
+          timestamp: performance.now(),
+          data: data,
+        });
+        videoDecoderRef.current.decode(chunk);
+      }
+    });
+
     const unlisten = listen("remote_desktop_frame", (event) => {
       const payload = event.payload as RemoteDesktopFramePayload;
 
@@ -130,6 +166,10 @@ export const RemoteDesktop: React.FC = () => {
 
     return () => {
       unlisten.then((fn) => fn());
+      unlistenHS.then((fn) => fn());
+      if (videoDecoderRef.current) {
+        videoDecoderRef.current.close();
+      }
     };
   }, [selectedDisplay]);
 

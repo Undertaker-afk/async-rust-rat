@@ -9,10 +9,11 @@ use windows::{
     Win32::System::Com::*,
     Win32::Graphics::Direct3D::*,
 };
-use iroh::Endpoint;
+use iroh::{Endpoint, RelayMode, RelayMap};
 use moq_transport::setup;
 use tokio::sync::mpsc;
 use crate::features::remote_desktop::capture_screen;
+use nostr_sdk::prelude::*;
 
 pub struct VideoEncoder {
     transform: IMFTransform,
@@ -122,11 +123,30 @@ impl FallbackEncoder {
 
     pub fn encode(&mut self, bgr_frame: &[u8]) -> Vec<u8> {
         let yuv = bgr_to_yuv420p(bgr_frame, self.width as usize, self.height as usize);
-        let yuv_source = openh264::formats::RBGYUVConverter::new(self.width as usize, self.height as usize);
-        // Simplified fallback encoding
-        let mut bitstream = Vec::new();
-        // (Actual openh264 encoding logic would go here)
-        bitstream
+
+        let y_stride = self.width as usize;
+        let u_stride = self.width as usize / 2;
+        let v_stride = self.width as usize / 2;
+
+        let y_len = y_stride * self.height as usize;
+        let u_len = u_stride * (self.height as usize / 2);
+
+        let y = &yuv[0..y_len];
+        let u = &yuv[y_len..y_len + u_len];
+        let v = &yuv[y_len + u_len..];
+
+        let source = openh264::formats::YUVSource::with_strides(
+            self.width as usize,
+            self.height as usize,
+            y, y_stride,
+            u, u_stride,
+            v, v_stride,
+        );
+
+        match self.encoder.encode(&source) {
+            Ok(bitstream) => bitstream.to_vec(),
+            Err(_) => vec![],
+        }
     }
 }
 
@@ -158,13 +178,67 @@ fn bgr_to_nv12(bgr: &[u8], width: usize, height: usize) -> Vec<u8> {
 }
 
 fn bgr_to_yuv420p(bgr: &[u8], width: usize, height: usize) -> Vec<u8> {
-    // Standard YUV420P conversion for OpenH264
-    vec![]
+    let mut yuv = vec![0u8; width * height * 3 / 2];
+    let u_start = width * height;
+    let v_start = u_start + (width * height / 4);
+
+    for y in 0..height {
+        for x in 0..width {
+            let i = y * width + x;
+            let b = bgr[i * 3] as f32;
+            let g = bgr[i * 3 + 1] as f32;
+            let r = bgr[i * 3 + 2] as f32;
+
+            yuv[i] = (0.299 * r + 0.587 * g + 0.114 * b) as u8;
+
+            if y % 2 == 0 && x % 2 == 0 {
+                let uv_idx = (y / 2) * (width / 2) + (x / 2);
+                yuv[u_start + uv_idx] = (-0.169 * r - 0.331 * g + 0.499 * b + 128.0) as u8;
+                yuv[v_start + uv_idx] = (0.499 * r - 0.418 * g - 0.0813 * b + 128.0) as u8;
+            }
+        }
+    }
+    yuv
+}
+
+async fn negotiate_relay_via_nostr(keys: &Keys) -> anyhow::Result<RelayMap> {
+    let opts = ClientOptions::new().wait_for_send(true);
+    let client = nostr_sdk::Client::builder().signer(keys.clone()).opts(opts).build();
+    client.add_relay("wss://relay.damus.io").await?;
+    client.connect().await;
+
+    let mut relay_map = RelayMap::default();
+
+    // Subscribe to DMs
+    let filter = Filter::new().kind(Kind::GiftWrap).pubkey(keys.public_key()).limit(1);
+    client.subscribe(vec![filter], None).await?;
+
+    // Wait for the DM with relay negotiation
+    let mut notifications = client.notifications();
+    while let Ok(notification) = notifications.recv().await {
+        if let RelayPoolNotification::Event { event, .. } = notification {
+            if let Ok(unwrapped) = client.unwrap_gift_wrap(&event).await {
+                if unwrapped.rumor.content.contains("best_relay:") {
+                    let relay_host = unwrapped.rumor.content.split(':').last().unwrap_or("default");
+                    let url = format!("https://{}.tailscale.net", relay_host);
+                    if let Ok(url) = iroh::relay::RelayUrl::from_str(&url) {
+                        relay_map.add_node(url, iroh::relay::RelayMode::Stun);
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    Ok(relay_map)
 }
 
 pub async fn start_high_speed_stream(ticket_str: String, room: String) -> anyhow::Result<()> {
+    let keys = Keys::generate();
+    let relay_map = negotiate_relay_via_nostr(&keys).await.unwrap_or_else(|_| RelayMap::default());
+
     let endpoint = Endpoint::builder()
-        .discovery_n0()
+        .relay_mode(RelayMode::Custom(relay_map))
         .bind()
         .await?;
 
