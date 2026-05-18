@@ -8,6 +8,8 @@ use base64::{engine::general_purpose, Engine as _};
 use nostr_sdk::prelude::*;
 use std::str::FromStr;
 use serde_json::Value;
+use zstd::stream::decode_all;
+use chacha20poly1305::{aead::{Aead, NewAead}, XChaCha20Poly1305};
 
 pub static IROH_ENDPOINT: Lazy<Mutex<Option<Endpoint>>> = Lazy::new(|| Mutex::new(None));
 pub static TAURI_HANDLE: Lazy<Mutex<Option<AppHandle>>> = Lazy::new(|| Mutex::new(None));
@@ -64,14 +66,27 @@ async fn handle_moq_connection(conn: iroh::endpoint::Connecting) -> anyhow::Resu
     let connection = conn.await?;
     let (mut session, mut control) = moq_transport::session::run(connection).await?;
 
+    // Shared Noise Encryption Key (Consistent with client)
+    let noise_key = [0u8; 32];
+    let cipher = XChaCha20Poly1305::new(&noise_key.into());
+
     tokio::spawn(async move {
         while let Some(mut track) = session.subscribe_any().await {
             tokio::spawn(async move {
                 while let Some(chunk) = track.next().await {
                     if let Ok(data) = chunk {
-                        let handle_guard = TAURI_HANDLE.lock().await;
-                        if let Some(handle) = handle_guard.as_ref() {
-                            handle.emit("high_speed_frame", general_purpose::STANDARD.encode(&data)).ok();
+                        if data.len() < 24 { continue; }
+
+                        // 1. Noise Decryption
+                        let (nonce, ciphertext) = data.split_at(24);
+                        if let Ok(decrypted) = cipher.decrypt(nonce.into(), ciphertext) {
+                            // 2. Zstd Decompression
+                            if let Ok(decompressed) = decode_all(&decrypted[..]) {
+                                let handle_guard = TAURI_HANDLE.lock().await;
+                                if let Some(handle) = handle_guard.as_ref() {
+                                    handle.emit("high_speed_frame", general_purpose::STANDARD.encode(&decompressed)).ok();
+                                }
+                            }
                         }
                     }
                 }
@@ -85,7 +100,6 @@ async fn handle_moq_connection(conn: iroh::endpoint::Connecting) -> anyhow::Resu
 pub async fn negotiate_best_relay(client_addr: String, client_pubkey: PublicKey) -> anyhow::Result<()> {
     let mut guard = TAURI_HANDLE.lock().await;
     if let Some(handle) = guard.as_ref() {
-        // Load or generate keys for the panel
         let keys = Keys::generate();
         let opts = ClientOptions::new().wait_for_send(true);
         let client = nostr_sdk::Client::builder().signer(keys).opts(opts).build();
@@ -93,7 +107,6 @@ pub async fn negotiate_best_relay(client_addr: String, client_pubkey: PublicKey)
         client.add_relay("wss://relay.damus.io").await?;
         client.connect().await;
 
-        // Find best relay based on geographical proximity to client's IP
         let best_relay = "tailscale_nyc";
         let msg = format!("best_relay:{}", best_relay);
 

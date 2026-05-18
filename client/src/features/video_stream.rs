@@ -14,6 +14,9 @@ use moq_transport::setup;
 use tokio::sync::mpsc;
 use crate::features::remote_desktop::capture_screen;
 use nostr_sdk::prelude::*;
+use zstd::stream::encode_all;
+use chacha20poly1305::{aead::{Aead, NewAead}, XChaCha20Poly1305};
+use rand::RngCore;
 
 pub struct VideoEncoder {
     transform: IMFTransform,
@@ -33,7 +36,7 @@ impl VideoEncoder {
             let output_type = output_type.ok_or(Error::from_win32(WIN32_ERROR(0)))?;
             output_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
             output_type.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_H264)?;
-            output_type.SetUINT32(&MF_MT_AVG_BITRATE, 2000000)?;
+            output_type.SetUINT32(&MF_MT_AVG_BITRATE, 1000000)?;
             MFSetAttributeSize(&output_type, &MF_MT_FRAME_SIZE, width, height)?;
             MFSetAttributeRatio(&output_type, &MF_MT_FRAME_RATE, fps, 1)?;
             output_type.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
@@ -209,11 +212,9 @@ async fn negotiate_relay_via_nostr(keys: &Keys) -> anyhow::Result<RelayMap> {
 
     let mut relay_map = RelayMap::default();
 
-    // Subscribe to DMs
     let filter = Filter::new().kind(Kind::GiftWrap).pubkey(keys.public_key()).limit(1);
     client.subscribe(vec![filter], None).await?;
 
-    // Wait for the DM with relay negotiation
     let mut notifications = client.notifications();
     while let Ok(notification) = notifications.recv().await {
         if let RelayPoolNotification::Event { event, .. } = notification {
@@ -248,6 +249,10 @@ pub async fn start_high_speed_stream(ticket_str: String, room: String) -> anyhow
     let (mut session, mut control) = moq_transport::session::run(conn).await?;
     let mut publisher = session.publish(&room).await?;
 
+    // Shared Noise Encryption Key (Simplified for example)
+    let noise_key = [0u8; 32];
+    let cipher = XChaCha20Poly1305::new(&noise_key.into());
+
     tokio::spawn(async move {
         let width = 1280;
         let height = 720;
@@ -264,12 +269,30 @@ pub async fn start_high_speed_stream(ticket_str: String, room: String) -> anyhow
                     let nv12_data = bgr_to_nv12(&raw_data, w, h);
                     if let Ok(slices) = enc.encode_frame(&nv12_data, timestamp) {
                         for slice in slices {
-                            publisher.write(slice).await.ok();
+                            // 1. Zstd Compression
+                            if let Ok(compressed) = encode_all(&slice[..], 10) {
+                                // 2. Noise Encryption (ChaCha20Poly1305)
+                                let mut nonce = [0u8; 24];
+                                rand::rng().fill_bytes(&mut nonce);
+                                if let Ok(encrypted) = cipher.encrypt(&nonce.into(), &compressed[..]) {
+                                    let mut final_payload = nonce.to_vec();
+                                    final_payload.extend_from_slice(&encrypted);
+                                    publisher.write(final_payload).await.ok();
+                                }
+                            }
                         }
                     }
                 } else if let Some(enc) = fallback.as_mut() {
                     let packet = enc.encode(&raw_data);
-                    publisher.write(packet).await.ok();
+                    if let Ok(compressed) = encode_all(&packet[..], 10) {
+                        let mut nonce = [0u8; 24];
+                        rand::rng().fill_bytes(&mut nonce);
+                        if let Ok(encrypted) = cipher.encrypt(&nonce.into(), &compressed[..]) {
+                            let mut final_payload = nonce.to_vec();
+                            final_payload.extend_from_slice(&encrypted);
+                            publisher.write(final_payload).await.ok();
+                        }
+                    }
                 }
             }
             tokio::time::sleep(tokio::time::Duration::from_millis(33)).await;
