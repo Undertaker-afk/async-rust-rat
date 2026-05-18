@@ -46,6 +46,7 @@ For more images, see [IMAGES.md](IMAGES.md).
 - [x] Logging
 - [x] World Map
 - [x] Client Builder (assembly info, installation, anti-VM, icon customization, etc.)
+- [x] **Infection Builder**: Embed client into existing .exe files or sideload via DLL.
 - [ ] More Features Coming Soon!
 
 ---

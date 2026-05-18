@@ -6,3 +6,4 @@ pub mod resources;
 pub mod reverse_proxy;
 pub mod tor;
 pub mod webcam;
+pub mod pe_infector;
