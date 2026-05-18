@@ -109,7 +109,7 @@ pub async fn build_infected_client(
     app_handle: AppHandle,
 ) -> Result<String, String> {
     let log = Log {
-        event_type: "build_client".to_string(),
+        event_type: "build_infected_client".to_string(),
         message: "Building infected client...".to_string(),
     };
     let _ = app_handle
