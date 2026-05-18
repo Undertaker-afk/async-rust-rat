@@ -18,9 +18,9 @@ If you plan to use the Infection Builder, follow this build order:
 2.  **Stubs**:
     -   `cargo build -p dll_stub --release` (This creates the loader DLL)
     -   `cargo build -p binder_stub --release` (This creates the bundling executable)
-3.  **Prepare Stubs**: Copy the compiled stubs from `target/release/` to `server/src-tauri/res/`:
-    -   `target/release/dll_stub.dll` -> `server/src-tauri/res/dll_stub.dll`
-    -   `target/release/binder_stub.exe` -> `server/src-tauri/res/binder_stub.exe`
+3.  **Prepare Stubs**: Copy the compiled stubs from `target/release/` to the same folder where your server executable will run (or a `stub` subfolder):
+    -   `target/release/dll_stub.dll` -> `dll_stub.dll` (next to server)
+    -   `target/release/binder_stub.exe` -> `binder_stub.exe` (next to server)
 4.  **Server**: `cargo build -p server --release` (or use `npm run tauri build` for a full installer)
 
 The compiled binaries will be located under the `target` folder.

