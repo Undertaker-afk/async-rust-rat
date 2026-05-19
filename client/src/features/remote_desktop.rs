@@ -170,11 +170,12 @@ pub async fn take_screenshot(display: String) {
         let jpeg_data = jpeg_bytes.into_inner();
 
         if crate::service::config::get_config().use_tor {
-            if let Some(blob_info) = crate::features::iroh::add_blob(jpeg_data, "screenshot.jpg".to_string(), common::packets::BlobContext::Screenshot).await {
-                if let Err(e) = send_packet(ServerboundPacket::IrohBlobReady(blob_info)).await {
-                    eprintln!("❌ Failed to send iroh blob info: {}", e);
+            if let Some(blob_info) = crate::features::iroh::add_blob(jpeg_data.clone(), "screenshot.jpg".to_string(), common::packets::BlobContext::Screenshot).await {
+                if send_packet(ServerboundPacket::IrohBlobReady(blob_info)).await.is_ok() {
+                    return;
+                } else {
+                    eprintln!("❌ Failed to send iroh blob info, falling back to direct transfer");
                 }
-                return;
             }
         }
 

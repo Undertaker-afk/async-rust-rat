@@ -30,7 +30,10 @@ pub async fn init_iroh() -> Result<IrohInfo, Box<dyn std::error::Error + Send + 
     let node_id = secret_key.public_key().to_string();
 
     let derp_map_url = "https://login.tailscale.com/derpmap/default";
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
 
     let mut pings = Vec::new();
     let mut derp_map_opt = None;
@@ -69,7 +72,9 @@ pub async fn init_iroh() -> Result<IrohInfo, Box<dyn std::error::Error + Send + 
     }));
 
     let mut lock = IROH_NODE.lock().await;
-    *lock = Some(node);
+    if lock.is_none() {
+        *lock = Some(node);
+    }
 
     Ok(info)
 }
@@ -134,9 +139,15 @@ pub async fn set_iroh_config(server_node_id: String, region_id: u16) {
                 }
 
                 if !nodes.is_empty() {
-                    let relay_map = RelayMap::from_nodes(nodes).unwrap();
-                    let _ = node.endpoint.set_relay_mode(RelayMode::Custom(relay_map));
-                    println!("Switched Iroh relay to region {} ({})", region.region_id, region.region_code);
+                    match RelayMap::from_nodes(nodes) {
+                        Ok(relay_map) => {
+                            let _ = node.endpoint.set_relay_mode(RelayMode::Custom(relay_map));
+                            println!("Switched Iroh relay to region {} ({})", region.region_id, region.region_code);
+                        }
+                        Err(e) => {
+                            eprintln!("Failed to create relay map: {}", e);
+                        }
+                    }
                 }
             }
         }
@@ -145,12 +156,15 @@ pub async fn set_iroh_config(server_node_id: String, region_id: u16) {
 
 pub async fn download_blob(peer_node_id: String, blob_info: IrohBlobInfo) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
     let node_arc = get_iroh_node().await.ok_or("Iroh node not initialized")?;
-    let node = node_arc.lock().await;
+    let endpoint = {
+        let node = node_arc.lock().await;
+        node.endpoint.clone()
+    };
     let peer_public_key: iroh::PublicKey = peer_node_id.parse()?;
     let addr = NodeAddr::new(peer_public_key);
 
     let hash = iroh_blobs::Hash::from_hex(&blob_info.hash)?;
-    let mut stream = iroh_blobs::get::blobs::get_to_reader(&node.endpoint, addr, hash).await?;
+    let mut stream = iroh_blobs::get::blobs::get_to_reader(&endpoint, addr, hash).await?;
     let mut buffer = Vec::with_capacity(blob_info.size as usize);
     stream.read_to_end(&mut buffer).await?;
 

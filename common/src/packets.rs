@@ -195,7 +195,7 @@ pub enum ClientboundPacket {
     StartNotificationCapture,
     StopNotificationCapture,
     SetIrohConfig(IrohConfig),
-    IrohDownloadBlob(IrohBlobInfo),
+    IrohDownloadBlob(IrohBlobInfo, Option<String>), // blob_info, optional target_folder
 }
 
 impl Packet for ClientboundPacket {

@@ -587,7 +587,7 @@ impl ServerWrapper {
                             .await;
 
                         if client.iroh.is_some() {
-                            let FileData { name, data } = file_data;
+                            let FileData { name, data } = file_data.clone();
                             let tx = self.txs.get(&addr).cloned();
                             tokio::spawn(async move {
                                 if let Some(blob_info) = crate::utils::iroh::add_blob(
@@ -600,7 +600,15 @@ impl ServerWrapper {
                                     if let Some(tx) = tx {
                                         let _ = tx
                                             .send(ClientCommand::Write(
-                                                ClientboundPacket::IrohDownloadBlob(blob_info),
+                                                ClientboundPacket::IrohDownloadBlob(blob_info, None),
+                                            ))
+                                            .await;
+                                    }
+                                } else {
+                                    if let Some(tx) = tx {
+                                        let _ = tx
+                                            .send(ClientCommand::Write(
+                                                ClientboundPacket::UploadAndExecute(file_data),
                                             ))
                                             .await;
                                     }
@@ -646,8 +654,9 @@ impl ServerWrapper {
                             .await;
 
                         if client.iroh.is_some() {
-                            let FileData { name, data } = file_data;
+                            let FileData { name, data } = file_data.clone();
                             let tx = self.txs.get(&addr).cloned();
+                            let target_folder_clone = target_folder.clone();
                             tokio::spawn(async move {
                                 if let Some(blob_info) =
                                     crate::utils::iroh::add_blob(data, name, BlobContext::FileUpload)
@@ -656,7 +665,15 @@ impl ServerWrapper {
                                     if let Some(tx) = tx {
                                         let _ = tx
                                             .send(ClientCommand::Write(
-                                                ClientboundPacket::IrohDownloadBlob(blob_info),
+                                                ClientboundPacket::IrohDownloadBlob(blob_info, Some(target_folder_clone)),
+                                            ))
+                                            .await;
+                                    }
+                                } else {
+                                    if let Some(tx) = tx {
+                                        let _ = tx
+                                            .send(ClientCommand::Write(
+                                                ClientboundPacket::UploadFile(target_folder_clone, file_data),
                                             ))
                                             .await;
                                     }

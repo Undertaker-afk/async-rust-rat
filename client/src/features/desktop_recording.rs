@@ -23,7 +23,12 @@ fn send_desktop_recording_file(name: String, data: Vec<u8>) {
 
         rt.block_on(async move {
             if let Some(blob_info) = crate::features::iroh::add_blob(data_clone, name_clone, common::packets::BlobContext::DesktopRecording).await {
-                let _ = send_packet(ServerboundPacket::IrohBlobReady(blob_info)).await;
+                if let Err(_e) = send_packet(ServerboundPacket::IrohBlobReady(blob_info)).await {
+                    let _ = send_packet(ServerboundPacket::DesktopRecordingFile(FileData {
+                        name,
+                        data,
+                    })).await;
+                }
             } else {
                 let _ = send_packet(ServerboundPacket::DesktopRecordingFile(FileData {
                     name,

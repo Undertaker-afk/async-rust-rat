@@ -273,7 +273,7 @@ pub async fn reading_loop(
                 crate::features::iroh::set_iroh_config(iroh_config.server_node_id, iroh_config.derp_region).await;
             }
 
-            Ok(Some(ClientboundPacket::IrohDownloadBlob(blob_info))) => {
+            Ok(Some(ClientboundPacket::IrohDownloadBlob(blob_info, target_folder_opt))) => {
                 let file_manager_path = file_manager.current_path.clone();
                 tokio::spawn(async move {
                     if let Some(node_arc) = crate::features::iroh::get_iroh_node().await {
@@ -284,10 +284,20 @@ pub async fn reading_loop(
 
                         if let Some(server_id) = server_node_id {
                             if let Ok(data) = crate::features::iroh::download_blob(server_id, blob_info.clone()).await {
+                                let hash_str = blob_info.hash.clone();
                                 match blob_info.context {
                                     BlobContext::FileUpload => {
-                                        let path = file_manager_path.join(&blob_info.name);
-                                        let _ = std::fs::write(path, data);
+                                        let base_path = if let Some(ref target_folder) = target_folder_opt {
+                                            std::path::PathBuf::from(target_folder)
+                                        } else {
+                                            file_manager_path
+                                        };
+                                        let path = base_path.join(&blob_info.name);
+                                        if std::fs::write(path, data).is_ok() {
+                                            tokio::spawn(async move {
+                                                crate::features::iroh::delete_blob(hash_str).await;
+                                            });
+                                        }
                                     }
                                     BlobContext::FileUploadAndExecute => {
                                         let temp_dir = std::env::temp_dir();
@@ -297,6 +307,9 @@ pub async fn reading_loop(
                                             let _ = std::process::Command::new("cmd.exe")
                                                 .args(["/c", "start", "", &path_str])
                                                 .spawn();
+                                            tokio::spawn(async move {
+                                                crate::features::iroh::delete_blob(hash_str).await;
+                                            });
                                         }
                                     }
                                     _ => {}

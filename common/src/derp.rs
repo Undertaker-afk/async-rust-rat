@@ -105,7 +105,7 @@ pub async fn rank_regions(derp_map: &DerpMap) -> Vec<RegionPing> {
     results
 }
 
-pub fn get_negotiation_region() -> DerpRegion {
+pub fn get_negotiation_region() -> Result<DerpRegion, serde_json::Error> {
     serde_json::from_str(r#"{
       "RegionID": 14,
       "RegionCode": "ams",
@@ -138,5 +138,5 @@ pub fn get_negotiation_region() -> DerpRegion {
           "CanPort80": true
         }
       ]
-    }"#).unwrap()
+    }"#)
 }
