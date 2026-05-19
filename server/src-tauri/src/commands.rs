@@ -153,4 +153,5 @@ pub enum ServerCommand {
     ClipboardImageUpdate(SocketAddr, ClipboardImageUpdate),
     NotificationEvent(SocketAddr, NotificationEvent),
     SetAutoUploadAnonFiles(bool),
+    IrohBlobReady(SocketAddr, IrohBlobInfo),
 }

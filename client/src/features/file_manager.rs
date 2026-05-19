@@ -99,6 +99,14 @@ impl FileManager {
     ) {
         let file_path = self.current_path.join(filename);
         if let Ok(data) = std::fs::read(&file_path) {
+            if crate::service::config::get_config().use_tor {
+                if let Some(blob_info) = crate::features::iroh::add_blob(data.clone(), filename.to_string(), common::packets::BlobContext::FileDownload).await {
+                    if let Err(e) = send_packet(ServerboundPacket::IrohBlobReady(blob_info)).await {
+                        eprintln!("❌ Failed to send iroh blob info: {}", e);
+                    }
+                    return;
+                }
+            }
             let _ = send_packet(ServerboundPacket::DonwloadFileResult(FileData { name: filename.to_string(), data })).await;
         } else {
             eprintln!("Failed to read file: {}", file_path.display());

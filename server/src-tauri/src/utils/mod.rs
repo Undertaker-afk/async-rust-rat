@@ -4,5 +4,6 @@ pub mod encryption;
 pub mod logger;
 pub mod resources;
 pub mod reverse_proxy;
+pub mod iroh;
 pub mod tor;
 pub mod webcam;

