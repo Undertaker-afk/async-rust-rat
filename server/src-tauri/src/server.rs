@@ -1441,6 +1441,12 @@ impl ServerWrapper {
                                             }
                                             _ => {}
                                         }
+
+                                        // Cleanup blob after transfer
+                                        let hash_str = blob_info_clone.hash.clone();
+                                        tokio::spawn(async move {
+                                            crate::utils::iroh::delete_blob(hash_str).await;
+                                        });
                                     }
                                     Err(e) => println!("Failed to download iroh blob: {}", e),
                                 }

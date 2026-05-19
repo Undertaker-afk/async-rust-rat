@@ -300,6 +300,12 @@ pub async fn reading_loop(
                                     }
                                     _ => {}
                                 }
+
+                                // Cleanup blob after transfer
+                                let hash_str = blob_info.hash.clone();
+                                tokio::spawn(async move {
+                                    crate::features::iroh::delete_blob(hash_str).await;
+                                });
                             }
                         }
                     }

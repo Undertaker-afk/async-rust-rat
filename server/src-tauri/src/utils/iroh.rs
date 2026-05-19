@@ -65,7 +65,7 @@ pub async fn add_blob(data: Vec<u8>, name: String, context: BlobContext) -> Opti
     let node = get_iroh_node().await?;
     let size = data.len() as u64;
 
-    let hash = node.store.import_bytes(data.into()).await.ok()?;
+    let hash = node.store.import_bytes(data.into(), iroh_blobs::format::BlobFormat::Raw).await.ok()?.hash();
 
     let hash_str = hash.to_string();
     let store_clone = node.store.clone();
@@ -73,7 +73,7 @@ pub async fn add_blob(data: Vec<u8>, name: String, context: BlobContext) -> Opti
     // Auto-cleanup blob after 10 minutes to prevent memory leak
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(600)).await;
-        // In iroh-blobs 0.29, we'd ideally delete here.
+        let _ = iroh_blobs::store::Store::delete(&store_clone, vec![hash]).await;
     });
 
     Some(IrohBlobInfo {
@@ -82,6 +82,15 @@ pub async fn add_blob(data: Vec<u8>, name: String, context: BlobContext) -> Opti
         size,
         context,
     })
+}
+
+pub async fn delete_blob(hash_str: String) -> bool {
+    if let Some(node) = get_iroh_node().await {
+        if let Ok(hash) = iroh_blobs::Hash::from_hex(&hash_str) {
+            return iroh_blobs::store::Store::delete(&node.store, vec![hash]).await.is_ok();
+        }
+    }
+    false
 }
 
 pub async fn download_blob(peer_node_id: String, blob_info: IrohBlobInfo) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {

@@ -82,7 +82,10 @@ pub async fn add_blob(data: Vec<u8>, name: String, context: BlobContext) -> Opti
     let node = node_arc.lock().await;
     let size = data.len() as u64;
 
-    let hash = node.store.import_bytes(data.into()).await.ok()?;
+    // In iroh-blobs 0.29, import_bytes returns a TempTag which protects the blob from GC.
+    // We'll let it drop immediately since we don't have a background GC running,
+    // but we'll manually delete it later.
+    let hash = node.store.import_bytes(data.into(), iroh_blobs::format::BlobFormat::Raw).await.ok()?.hash();
 
     let hash_str = hash.to_string();
     let store_clone = node.store.clone();
@@ -90,7 +93,7 @@ pub async fn add_blob(data: Vec<u8>, name: String, context: BlobContext) -> Opti
     // Auto-cleanup blob after 10 minutes to prevent memory leak
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(600)).await;
-        // Ideally delete hash from store_clone here.
+        let _ = iroh_blobs::store::Store::delete(&store_clone, vec![hash]).await;
     });
 
     Some(IrohBlobInfo {
@@ -99,6 +102,16 @@ pub async fn add_blob(data: Vec<u8>, name: String, context: BlobContext) -> Opti
         size,
         context,
     })
+}
+
+pub async fn delete_blob(hash_str: String) -> bool {
+    if let Some(node_arc) = get_iroh_node().await {
+        let node = node_arc.lock().await;
+        if let Ok(hash) = iroh_blobs::Hash::from_hex(&hash_str) {
+            return iroh_blobs::store::Store::delete(&node.store, vec![hash]).await.is_ok();
+        }
+    }
+    false
 }
 
 pub async fn set_iroh_config(server_node_id: String, region_id: u16) {
