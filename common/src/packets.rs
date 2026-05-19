@@ -287,7 +287,7 @@ impl Packet for ClientboundPacket {
             ClientboundPacket::StartNotificationCapture => "Start Notification Capture",
             ClientboundPacket::StopNotificationCapture => "Stop Notification Capture",
             ClientboundPacket::SetIrohConfig(_) => "Set Iroh Config",
-            ClientboundPacket::IrohDownloadBlob(_) => "Iroh Download Blob",
+            ClientboundPacket::IrohDownloadBlob(_, _) => "Iroh Download Blob",
         }
     }
 }

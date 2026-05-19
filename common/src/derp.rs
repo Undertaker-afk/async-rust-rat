@@ -14,6 +14,7 @@ pub struct DerpMap {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "PascalCase")]
 pub struct DerpRegion {
+    #[serde(rename = "RegionID")]
     pub region_id: u16,
     pub region_code: String,
     pub region_name: String,
@@ -24,9 +25,12 @@ pub struct DerpRegion {
 #[serde(rename_all = "PascalCase")]
 pub struct DerpNode {
     pub name: String,
+    #[serde(rename = "RegionID")]
     pub region_id: u16,
     pub host_name: String,
+    #[serde(rename = "IPv4")]
     pub ipv4: String,
+    #[serde(rename = "IPv6")]
     pub ipv6: Option<String>,
     pub can_port_80: Option<bool>,
 }
