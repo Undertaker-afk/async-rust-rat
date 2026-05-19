@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use tokio::net::TcpStream;
+use tokio::task::JoinSet;
 use tokio::time::timeout;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -38,8 +39,9 @@ pub struct RegionPing {
 
 pub async fn ping_region(region: &DerpRegion) -> Option<u128> {
     let mut best_ping = None;
+    const MAX_NODES_PER_REGION: usize = 3;
 
-    for node in &region.nodes {
+    for node in region.nodes.iter().take(MAX_NODES_PER_REGION) {
         let start = Instant::now();
         let addr = format!("{}:443", node.ipv4);
 
@@ -74,16 +76,30 @@ pub async fn ping_region(region: &DerpRegion) -> Option<u128> {
 }
 
 pub async fn rank_regions(derp_map: &DerpMap) -> Vec<RegionPing> {
-    let mut results = Vec::new();
+    const MAX_REGIONS: usize = 8;
+    const GLOBAL_TIMEOUT_SECS: u64 = 8;
 
-    for region in derp_map.regions.values() {
-        if let Some(ping) = ping_region(region).await {
-            results.push(RegionPing {
+    let mut results = Vec::new();
+    let mut ping_tasks = JoinSet::new();
+
+    for region in derp_map.regions.values().take(MAX_REGIONS).cloned() {
+        ping_tasks.spawn(async move {
+            ping_region(&region).await.map(|ping| RegionPing {
                 region_id: region.region_id,
                 ping,
-            });
-        }
+            })
+        });
     }
+
+    let collect = async {
+        while let Some(joined) = ping_tasks.join_next().await {
+            if let Ok(Some(region_ping)) = joined {
+                results.push(region_ping);
+            }
+        }
+    };
+
+    let _ = timeout(Duration::from_secs(GLOBAL_TIMEOUT_SECS), collect).await;
 
     results.sort_by_key(|r| r.ping);
     results

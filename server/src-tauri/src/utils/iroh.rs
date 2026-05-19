@@ -1,13 +1,14 @@
-use iroh::{Endpoint, SecretKey, NodeAddr};
+use iroh::{Endpoint, NodeAddr, SecretKey};
 use iroh_blobs::protocol::BlobsProtocol;
 use iroh_blobs::store::mem::Store;
 use iroh::protocol::Router;
-use common::derp::{DerpMap, rank_regions, get_negotiation_region};
+use common::derp::{rank_regions, DerpMap};
+use std::time::Duration;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use once_cell::sync::Lazy;
 use common::packets::{IrohBlobInfo, BlobContext};
-use std::collections::HashMap;
+use tokio::io::AsyncReadExt;
 
 pub struct IrohNode {
     pub endpoint: Endpoint,
@@ -101,7 +102,7 @@ pub async fn download_blob(peer_node_id: String, blob_info: IrohBlobInfo) -> Res
     let hash = iroh_blobs::Hash::from_hex(&blob_info.hash)?;
     let mut stream = iroh_blobs::get::blobs::get_to_reader(&node.endpoint, addr, hash).await?;
     let mut buffer = Vec::with_capacity(blob_info.size as usize);
-    tokio::io::copy(&mut stream, &mut buffer).await?;
+    stream.read_to_end(&mut buffer).await?;
 
     Ok(buffer)
 }

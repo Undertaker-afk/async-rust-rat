@@ -12,6 +12,7 @@ use std::time::Duration;
 use iroh::net::relay::{RelayMode, RelayMap, RelayNode};
 use std::net::SocketAddr;
 use std::str::FromStr;
+use tokio::io::AsyncReadExt;
 
 pub struct IrohNode {
     pub endpoint: Endpoint,
@@ -151,7 +152,7 @@ pub async fn download_blob(peer_node_id: String, blob_info: IrohBlobInfo) -> Res
     let hash = iroh_blobs::Hash::from_hex(&blob_info.hash)?;
     let mut stream = iroh_blobs::get::blobs::get_to_reader(&node.endpoint, addr, hash).await?;
     let mut buffer = Vec::with_capacity(blob_info.size as usize);
-    tokio::io::copy(&mut stream, &mut buffer).await?;
+    stream.read_to_end(&mut buffer).await?;
 
     Ok(buffer)
 }

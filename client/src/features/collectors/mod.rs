@@ -67,6 +67,7 @@ pub async fn client_info(group: String) -> ClientInfo {
 
     ClientInfo {
         data: client_data,
+        iroh: None,
         system: system_info,
         ram: ram_info,
         cpu: cpu_info,

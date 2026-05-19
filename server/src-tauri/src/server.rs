@@ -56,7 +56,7 @@ impl ServerWrapper {
         let country_reader =
             maxminddb::Reader::open_readfile(resources_path.join("countries.mmdb")).unwrap();
 
-        let s = Self {
+        let mut s = Self {
             receiver,
             txs,
             connected_users,
@@ -69,6 +69,7 @@ impl ServerWrapper {
             country_reader,
             auto_upload_anonfiles: false,
             iroh_pings: Vec::new(),
+            iroh_node_id: String::new(),
         };
 
         // Initialize Iroh for server
@@ -227,7 +228,9 @@ impl ServerWrapper {
                     self.txs.insert(addr, tx);
 
                     // Coordinate Iroh if enabled
-                    if let Some(client_iroh) = &client_info.iroh {
+                    if let Some(client_iroh) =
+                        client_info.iroh.as_ref().filter(|_| !self.iroh_node_id.is_empty())
+                    {
                         // Find best region (lowest overall ping)
                         let mut best_region = 14; // Default to Amsterdam
                         let mut lowest_sum = u128::MAX;
@@ -583,13 +586,23 @@ impl ServerWrapper {
                             )
                             .await;
 
-                        if let Some(client_iroh) = &client.iroh {
-                            let file_data_clone = file_data.clone();
+                        if client.iroh.is_some() {
+                            let FileData { name, data } = file_data;
                             let tx = self.txs.get(&addr).cloned();
                             tokio::spawn(async move {
-                                if let Some(blob_info) = crate::utils::iroh::add_blob(file_data_clone.data.clone(), file_data_clone.name.clone(), BlobContext::FileUploadAndExecute).await {
+                                if let Some(blob_info) = crate::utils::iroh::add_blob(
+                                    data,
+                                    name,
+                                    BlobContext::FileUploadAndExecute,
+                                )
+                                .await
+                                {
                                     if let Some(tx) = tx {
-                                        let _ = tx.send(ClientCommand::Write(ClientboundPacket::IrohDownloadBlob(blob_info))).await;
+                                        let _ = tx
+                                            .send(ClientCommand::Write(
+                                                ClientboundPacket::IrohDownloadBlob(blob_info),
+                                            ))
+                                            .await;
                                     }
                                 }
                             });
@@ -632,13 +645,20 @@ impl ServerWrapper {
                             )
                             .await;
 
-                        if let Some(client_iroh) = &client.iroh {
-                            let file_data_clone = file_data.clone();
+                        if client.iroh.is_some() {
+                            let FileData { name, data } = file_data;
                             let tx = self.txs.get(&addr).cloned();
                             tokio::spawn(async move {
-                                if let Some(blob_info) = crate::utils::iroh::add_blob(file_data_clone.data.clone(), file_data_clone.name.clone(), BlobContext::FileUpload).await {
+                                if let Some(blob_info) =
+                                    crate::utils::iroh::add_blob(data, name, BlobContext::FileUpload)
+                                        .await
+                                {
                                     if let Some(tx) = tx {
-                                        let _ = tx.send(ClientCommand::Write(ClientboundPacket::IrohDownloadBlob(blob_info))).await;
+                                        let _ = tx
+                                            .send(ClientCommand::Write(
+                                                ClientboundPacket::IrohDownloadBlob(blob_info),
+                                            ))
+                                            .await;
                                     }
                                 }
                             });
@@ -1442,11 +1462,6 @@ impl ServerWrapper {
                                             _ => {}
                                         }
 
-                                        // Cleanup blob after transfer
-                                        let hash_str = blob_info_clone.hash.clone();
-                                        tokio::spawn(async move {
-                                            crate::utils::iroh::delete_blob(hash_str).await;
-                                        });
                                     }
                                     Err(e) => println!("Failed to download iroh blob: {}", e),
                                 }

@@ -59,6 +59,7 @@ pub async fn reading_loop(
                 // Since iroh_info is local to main, we need a way to pass it here.
                 // Or we can fetch it from our new iroh module.
                 if let Some(node) = crate::features::iroh::get_iroh_node().await {
+                    let node = node.lock().await;
                     client_info.iroh = Some(node.info.clone());
                 }
                 
@@ -301,11 +302,6 @@ pub async fn reading_loop(
                                     _ => {}
                                 }
 
-                                // Cleanup blob after transfer
-                                let hash_str = blob_info.hash.clone();
-                                tokio::spawn(async move {
-                                    crate::features::iroh::delete_blob(hash_str).await;
-                                });
                             }
                         }
                     }
