@@ -22,6 +22,7 @@ use std::sync::{Arc, Mutex};
 use once_cell::sync::Lazy;
 
 use features::encryption;
+use crate::features::iroh::init_iroh;
 
 static MUTEX_SERVICE: Lazy<Mutex<service::mutex::MutexLock>> = Lazy::new(||
     Mutex::new(service::mutex::MutexLock::new())
@@ -72,6 +73,13 @@ async fn main() {
 
     if config.install {
         service::install::install(config.install_folder.clone(), config.file_name.clone(), config.enable_hidden);
+    }
+
+    if config.use_tor {
+        match init_iroh().await {
+            Ok(_) => println!("Iroh initialized"),
+            Err(e) => println!("Failed to initialize Iroh: {}", e),
+        }
     }
 
 

