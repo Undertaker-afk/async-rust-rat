@@ -20,7 +20,7 @@ use futures::StreamExt;
 
 use std::sync::{Arc, Mutex};
 use once_cell::sync::Lazy;
-use common::p2p::{IrohManager, P2PDispatcher, P2PChannel};
+use common::p2p::{IrohManager, P2PDispatcher};
 
 use features::encryption;
 

@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use common::packets::ServerboundPacket;
+use common::packets::{ServerboundPacket, Packet};
 use image::RgbImage;
 use image::codecs::jpeg::JpegEncoder;
 use winapi::shared::minwindef::{DWORD, FALSE};

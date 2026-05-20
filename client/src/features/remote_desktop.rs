@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use std::io::Cursor;
 use std::ptr::null_mut;
 
-use common::packets::{RemoteDesktopConfig, RemoteDesktopFrame, MouseClickData, KeyboardInputData, ServerboundPacket, ScreenshotData};
+use common::packets::{RemoteDesktopConfig, RemoteDesktopFrame, MouseClickData, KeyboardInputData, ServerboundPacket, ScreenshotData, Packet};
 use crate::handler::send_packet;
 
 use winapi::um::winuser::{

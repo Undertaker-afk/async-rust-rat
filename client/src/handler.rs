@@ -295,7 +295,7 @@ pub async fn reading_loop(
             Ok(Some(ClientboundPacket::P2PHandshakeResponse(server_iroh_addr_json, session_key))) => {
                 let iroh_manager = crate::IROH_MANAGER.lock().unwrap().clone();
                 if let Some(manager) = iroh_manager {
-                    let server_iroh_addr: iroh::EndpointAddr = serde_json::from_str(&server_iroh_addr_json).unwrap();
+                    let _server_iroh_addr: iroh::EndpointAddr = serde_json::from_str(&server_iroh_addr_json).unwrap();
                     let iroh_endpoint = manager.endpoint().clone();
                     let crypto = common::p2p::P2PChannel::new(session_key);
 

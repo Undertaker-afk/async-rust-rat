@@ -101,7 +101,7 @@ pub async fn start_server(
         tauri_state.port = port.to_string();
     };
 
-    ctx.send(ServerCommand::SetTauriHandle(app_handle))
+    ctx.send(ServerCommand::SetTauriHandle(app_handle.clone()))
         .await
         .map_err(|e| format!("Failed to set Tauri handle: {}", e))?;
 
@@ -119,7 +119,6 @@ pub async fn start_server(
     });
 
     // Auto-initialize Iroh P2P
-    let app_handle_clone = app_handle.clone();
     let tauri_state_clone = tauri_state.0.clone();
     tokio::spawn(async move {
         let secret_key = iroh::SecretKey::generate();

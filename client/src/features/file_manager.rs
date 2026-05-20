@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use common::packets::{ File, FileData, ServerboundPacket };
+use common::packets::{ File, FileData, ServerboundPacket, Packet };
 use crate::handler::send_packet;
 
 pub struct FileManager {

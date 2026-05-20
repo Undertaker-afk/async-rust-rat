@@ -7,6 +7,7 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
 use base64::{engine::general_purpose, Engine as _};
+use rand::RngCore;
 use rsa::pkcs8::EncodePublicKey;
 use rsa::rand_core::OsRng;
 use rsa::{RsaPrivateKey, RsaPublicKey};
@@ -1291,6 +1292,24 @@ impl ServerWrapper {
                         CurrentFolder(addr, path) => self.handle_current_folder(&addr, path).await,
                         DisksResult(addr, disks) => self.handle_disks(&addr, disks).await,
                         DownloadFileResult(addr, file_data) => self.handle_download_result(&addr, file_data).await,
+
+                        GetClients(resp) => {
+                            resp.send(self.connected_users.values().cloned().collect())
+                                .ok();
+                        }
+
+                        GetClient(addr, resp) => {
+                            // Try direct socket addr lookup first, then fall back to
+                            // reverse-mapping from display addr (for Tor clients where
+                            // the frontend uses the real IP but the key is 127.0.0.1).
+                            let result = self.connected_users.get(&addr).cloned().or_else(|| {
+                                let display = addr.to_string();
+                                self.display_to_socket
+                                    .get(&display)
+                                    .and_then(|sock| self.connected_users.get(sock).cloned())
+                            });
+                            resp.send(result).ok();
+                        }
 
                         StartReverseProxy(addr, port, local_port) => {
                             self.handle_command(&addr, ClientboundPacket::StartReverseProxy(port.clone()))
