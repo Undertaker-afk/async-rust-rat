@@ -7,7 +7,6 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
 use base64::{engine::general_purpose, Engine as _};
-use rand::RngCore;
 use rsa::pkcs8::EncodePublicKey;
 use rsa::rand_core::OsRng;
 use rsa::{RsaPrivateKey, RsaPublicKey};
@@ -856,9 +855,10 @@ impl ServerWrapper {
                         P2PHandshakeRequest(addr, client_iroh_addr_json) => {
                             let addr = self.resolve_addr(&addr);
                             let iroh_manager = {
-                                let state = self.tauri_handle.as_ref().unwrap().lock().unwrap().state::<crate::handlers::SharedTauriState>();
-                                let state = state.0.lock().unwrap();
-                                state.iroh_manager.clone()
+                                let handle_guard = self.tauri_handle.as_ref().unwrap().lock().unwrap();
+                                let state = handle_guard.state::<crate::handlers::SharedTauriState>();
+                                let state_lock = state.0.lock().unwrap();
+                                state_lock.iroh_manager.clone()
                             };
 
                             if let Some(iroh_manager) = iroh_manager {
@@ -880,18 +880,19 @@ impl ServerWrapper {
                                         let (dispatcher, mut s_rx, mut b_rx) = common::p2p::P2PDispatcher::new(conn, crypto);
                                         self.p2p_connections.insert(addr, dispatcher);
 
+                                        let p2p_tx_s = p2p_tx.clone();
                                         tokio::spawn(async move {
                                             while let Some(data) = s_rx.recv().await {
                                                 if let Ok((packet, _)) = ServerboundPacket::deserialized(&data) {
-                                                    let _ = p2p_tx.send((addr, packet)).await;
+                                                    let _ = p2p_tx_s.send((addr, packet)).await;
                                                 }
                                             }
                                         });
-                                        let p2p_tx_b = p2p_tx.clone();
+                                        let p2p_tx_b_task = p2p_tx.clone();
                                         tokio::spawn(async move {
                                             while let Some(data) = b_rx.recv().await {
                                                 if let Ok((packet, _)) = ServerboundPacket::deserialized(&data) {
-                                                    let _ = p2p_tx_b.send((addr, packet)).await;
+                                                    let _ = p2p_tx_b_task.send((addr, packet)).await;
                                                 }
                                             }
                                         });

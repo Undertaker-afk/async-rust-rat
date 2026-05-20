@@ -27,6 +27,7 @@ use crate::features::keylogger::{start_keylogger, stop_keylogger, send_offline_l
 use crate::features::browser::get_browser_data;
 //use crate::features::hvnc::{start_hvnc, stop_hvnc, open_process};
 use common::packets::*;
+use common::packets::Packet;
 use std::sync::Arc;
 use iroh;
 use rand_chacha::ChaCha20Rng;
