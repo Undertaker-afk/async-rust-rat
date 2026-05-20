@@ -118,6 +118,24 @@ pub async fn start_server(
         }
     });
 
+    // Auto-initialize Iroh P2P
+    let app_handle_clone = app_handle.clone();
+    let tauri_state_clone = tauri_state.0.clone();
+    tokio::spawn(async move {
+        let secret_key = iroh::SecretKey::generate();
+        match common::p2p::IrohManager::new(secret_key).await {
+            Ok(manager) => {
+                let manager = Arc::new(manager);
+                let mut state = tauri_state_clone.lock().unwrap();
+                state.iroh_manager = Some(manager);
+                println!("Iroh P2P initialized automatically.");
+            }
+            Err(e) => {
+                eprintln!("Failed to auto-initialize Iroh: {}", e);
+            }
+        }
+    });
+
     let ctx_for_listener = ctx.clone();
 
     let port = port.parse::<u16>().unwrap();
@@ -1497,6 +1515,33 @@ pub async fn init_tor(
     }
 
     Ok(manager.get_services())
+}
+
+#[tauri::command]
+pub async fn init_iroh(
+    tauri_state: State<'_, SharedTauriState>,
+) -> Result<String, String> {
+    {
+        let state = tauri_state.0.lock().unwrap();
+        if let Some(manager) = &state.iroh_manager {
+            return Ok(manager.endpoint().id().to_string());
+        }
+    }
+
+    let secret_key = iroh::SecretKey::generate();
+    let manager = common::p2p::IrohManager::new(secret_key)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let manager = Arc::new(manager);
+    let node_id = manager.endpoint().id().to_string();
+
+    {
+        let mut state = tauri_state.0.lock().unwrap();
+        state.iroh_manager = Some(manager);
+    }
+
+    Ok(node_id)
 }
 
 #[tauri::command]

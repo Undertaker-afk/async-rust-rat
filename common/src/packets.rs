@@ -53,6 +53,7 @@ pub enum ServerboundPacket {
     ClipboardUpdate(ClipboardUpdate),
     ClipboardImageUpdate(ClipboardImageUpdate),
     NotificationEvent(NotificationEvent),
+    P2PHandshakeRequest(String), // serialized iroh::NodeAddr
 }
 
 impl Packet for ServerboundPacket {
@@ -104,6 +105,7 @@ impl Packet for ServerboundPacket {
             ServerboundPacket::ClipboardUpdate(_) => "Clipboard Update",
             ServerboundPacket::ClipboardImageUpdate(_) => "Clipboard Image Update",
             ServerboundPacket::NotificationEvent(_) => "Notification Event",
+            ServerboundPacket::P2PHandshakeRequest(_) => "P2P Handshake Request",
         }
     }
 }
@@ -192,6 +194,7 @@ pub enum ClientboundPacket {
     StopClipboardMonitor,
     StartNotificationCapture,
     StopNotificationCapture,
+    P2PHandshakeResponse(String, [u8; 32]), // serialized iroh::NodeAddr, session key
 }
 
 impl Packet for ClientboundPacket {
@@ -282,6 +285,7 @@ impl Packet for ClientboundPacket {
             ClientboundPacket::StopClipboardMonitor => "Stop Clipboard Monitor",
             ClientboundPacket::StartNotificationCapture => "Start Notification Capture",
             ClientboundPacket::StopNotificationCapture => "Stop Notification Capture",
+            ClientboundPacket::P2PHandshakeResponse(_, _) => "P2P Handshake Response",
         }
     }
 }

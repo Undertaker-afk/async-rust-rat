@@ -152,5 +152,6 @@ pub enum ServerCommand {
     ClipboardUpdate(SocketAddr, ClipboardUpdate),
     ClipboardImageUpdate(SocketAddr, ClipboardImageUpdate),
     NotificationEvent(SocketAddr, NotificationEvent),
+    P2PHandshakeRequest(SocketAddr, String),
     SetAutoUploadAnonFiles(bool),
 }

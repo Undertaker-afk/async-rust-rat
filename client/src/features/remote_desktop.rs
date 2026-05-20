@@ -237,8 +237,20 @@ pub fn start_remote_desktop(config: RemoteDesktopConfig) {
 
                 let packet = ServerboundPacket::RemoteDesktopFrame(frame);
 
-                if let Err(e) = rt.block_on(send_packet(packet)) {
-                    eprintln!("❌ Failed to send remote desktop frame: {}", e);
+                // Try to send via P2P if available
+                let p2p_dispatcher = crate::P2P_DISPATCHER.lock().unwrap().clone();
+                let mut p2p_sent = false;
+                if let Some(dispatcher) = p2p_dispatcher {
+                    match rt.block_on(dispatcher.send(common::p2p::P2PMessageType::Stream, packet.serialized())) {
+                        Ok(_) => p2p_sent = true,
+                        Err(e) => eprintln!("❌ Failed to send remote desktop frame via P2P: {}", e),
+                    }
+                }
+
+                if !p2p_sent {
+                    if let Err(e) = rt.block_on(send_packet(packet)) {
+                        eprintln!("❌ Failed to send remote desktop frame: {}", e);
+                    }
                 }
             }
 

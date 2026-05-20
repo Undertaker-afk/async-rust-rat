@@ -99,7 +99,21 @@ impl FileManager {
     ) {
         let file_path = self.current_path.join(filename);
         if let Ok(data) = std::fs::read(&file_path) {
-            let _ = send_packet(ServerboundPacket::DonwloadFileResult(FileData { name: filename.to_string(), data })).await;
+            let packet = ServerboundPacket::DonwloadFileResult(FileData { name: filename.to_string(), data });
+
+            // Try to send via P2P if available
+            let p2p_dispatcher = crate::P2P_DISPATCHER.lock().unwrap().clone();
+            let mut p2p_sent = false;
+            if let Some(dispatcher) = p2p_dispatcher {
+                match dispatcher.send(common::p2p::P2PMessageType::Blob, packet.serialized()).await {
+                    Ok(_) => p2p_sent = true,
+                    Err(e) => eprintln!("❌ Failed to send file via P2P: {}", e),
+                }
+            }
+
+            if !p2p_sent {
+                let _ = send_packet(packet).await;
+            }
         } else {
             eprintln!("Failed to read file: {}", file_path.display());
         }
