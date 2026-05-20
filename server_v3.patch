@@ -1,0 +1,30 @@
+--- a/server/src-tauri/src/server.rs
++++ b/server/src-tauri/src/server.rs
+@@ -854,11 +854,11 @@
+                         P2PHandshakeRequest(addr, client_iroh_addr_json) => {
+                             let addr = self.resolve_addr(&addr);
+                             let iroh_manager = {
+-                                let handle = self.tauri_handle.as_ref().unwrap().lock().unwrap();
+-                                let state = handle.state::<crate::handlers::SharedTauriState>();
++                                let handle_guard = self.tauri_handle.as_ref().unwrap().lock().unwrap();
++                                let state = handle_guard.state::<crate::handlers::SharedTauriState>();
+                                 let state = state.0.lock().unwrap();
+                                 state.iroh_manager.clone()
+                             };
+
+                             if let Some(iroh_manager) = iroh_manager {
+                                 let client_iroh_addr: iroh::EndpointAddr = serde_json::from_str(&client_iroh_addr_json).unwrap();
+@@ -887,11 +887,12 @@
+                                                 }
+                                             }
+                                         });
+-                                        let p2p_tx_b = p2p_tx.clone();
++                                        let p2p_tx_b_clone = p2p_tx.clone();
+                                         tokio::spawn(async move {
+                                             while let Some(data) = b_rx.recv().await {
+                                                 if let Ok((packet, _)) = ServerboundPacket::deserialized(&data) {
+-                                                    let _ = p2p_tx_b.send((addr, packet)).await;
++                                                    let _ = p2p_tx_b_clone.send((addr, packet)).await;
+                                                 }
+                                             }
+                                         });
