@@ -71,7 +71,7 @@ async fn main() {
     }
 
     if config.install {
-        service::install::install(config.install_folder.clone(), config.file_name.clone(), config.enable_hidden);
+        service::install::install(&config);
     }
 
 

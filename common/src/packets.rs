@@ -533,6 +533,7 @@ pub struct SteamAccountEntry {
     pub persona_name: String,
     pub remember_password: String,
     pub last_logon: String,
+    pub avatar_url: String,
     pub details: String,
 }
 
