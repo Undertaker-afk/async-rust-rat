@@ -111,8 +111,9 @@ pub async fn start_server(
     };
     ctx.send(ServerCommand::Log(log)).await.unwrap();
 
+    let ctx_for_server = ctx.clone();
     let server_task = tokio::spawn(async move {
-        match ServerWrapper::spawn(crx).await {
+        match ServerWrapper::spawn(crx, ctx_for_server).await {
             Ok(_) => println!("Server started successfully"),
             Err(e) => eprintln!("Failed to start server: {}", e),
         }
@@ -121,6 +122,20 @@ pub async fn start_server(
     let ctx_for_listener = ctx.clone();
 
     let port = port.parse::<u16>().unwrap();
+
+    // Start WRAITH node
+    let wraith_port = port + 1; // Use port+1 for WRAITH
+    let wraith_node = wraith_core::Node::new_random_with_port(wraith_port).await.map_err(|e| e.to_string())?;
+    wraith_node.start().await.map_err(|e| e.to_string())?;
+
+    ctx.send(ServerCommand::SetWraithNode(wraith_node.clone()))
+        .await
+        .map_err(|e| format!("Failed to set WRAITH node: {}", e))?;
+
+    {
+        let mut tauri_state = tauri_state.0.lock().unwrap();
+        tauri_state.wraith_node = Some(wraith_node.clone());
+    }
 
     let listener_task = tokio::spawn(async move {
         match TcpListener::bind(("0.0.0.0", port)).await {
@@ -168,6 +183,10 @@ pub async fn stop_server(
 
         if let Some(listener_task) = tauri_state.listener_task.take() {
             listener_task.abort();
+        }
+
+        if let Some(wraith_node) = tauri_state.wraith_node.take() {
+            let _ = wraith_node.stop().await;
         }
 
         tauri_state.channel_tx = OnceCell::new();

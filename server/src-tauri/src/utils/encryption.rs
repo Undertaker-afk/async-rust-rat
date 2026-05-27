@@ -28,6 +28,7 @@ pub async fn handle_encryption_confirm(
     enc_t: Vec<u8>,
     exp_t: Vec<u8>,
     priv_key: RsaPrivateKey,
+    wraith_info: Option<([u8; 32], String, u16)>,
 ) {
     let t: Vec<u8> = priv_key
         .decrypt(Pkcs1v15Encrypt, &enc_t)
@@ -48,6 +49,12 @@ pub async fn handle_encryption_confirm(
         tx.send(ClientCommand::Write(ClientboundPacket::EncryptionAck))
             .await
             .unwrap();
+
+        if let Some((node_id, ip, port)) = wraith_info {
+            tx.send(ClientCommand::Write(ClientboundPacket::WraithServerInfo { node_id, ip, port }))
+                .await
+                .unwrap();
+        }
         tx.send(ClientCommand::Write(ClientboundPacket::InitClient))
             .await
             .unwrap();
