@@ -1,0 +1,465 @@
+//! NAT Type Detection
+//!
+//! This module implements NAT type detection using STUN-like probing to classify
+//! NAT devices into categories that determine the best traversal strategy.
+
+use super::dns::{StunDnsResolver, StunServerSpec, fallback_stun_ips};
+use super::stun::StunClient;
+use std::net::{IpAddr, SocketAddr};
+
+/// NAT type classification
+///
+/// Different NAT types require different traversal strategies:
+/// - Open: No NAT, direct connection possible
+/// - Full Cone: Easy to traverse, any external host can send
+/// - Restricted Cone: Moderate difficulty, requires simultaneous open
+/// - Port Restricted Cone: Moderate difficulty, requires simultaneous open
+/// - Symmetric: Hardest to traverse, requires birthday attack or relay
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NatType {
+    /// No NAT detected, public IP address
+    Open,
+    /// Full Cone NAT - any external host can send to mapped port
+    FullCone,
+    /// Restricted Cone NAT - only contacted IPs can send
+    RestrictedCone,
+    /// Port Restricted Cone NAT - only contacted IP:port can send
+    PortRestrictedCone,
+    /// Symmetric NAT - different mapping per destination
+    Symmetric,
+    /// Unknown NAT type (detection failed)
+    Unknown,
+}
+
+impl std::fmt::Display for NatType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Open => write!(f, "Open (No NAT)"),
+            Self::FullCone => write!(f, "Full Cone NAT"),
+            Self::RestrictedCone => write!(f, "Restricted Cone NAT"),
+            Self::PortRestrictedCone => write!(f, "Port Restricted Cone NAT"),
+            Self::Symmetric => write!(f, "Symmetric NAT"),
+            Self::Unknown => write!(f, "Unknown NAT Type"),
+        }
+    }
+}
+
+/// NAT detection error
+#[derive(Debug)]
+pub enum NatError {
+    /// I/O error during detection
+    Io(std::io::Error),
+    /// STUN server timeout
+    Timeout,
+    /// Invalid response from STUN server
+    InvalidResponse,
+    /// No STUN servers available
+    NoServers,
+}
+
+impl std::fmt::Display for NatError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(e) => write!(f, "I/O error: {e}"),
+            Self::Timeout => write!(f, "STUN server timeout"),
+            Self::InvalidResponse => write!(f, "Invalid STUN response"),
+            Self::NoServers => write!(f, "No STUN servers available"),
+        }
+    }
+}
+
+impl std::error::Error for NatError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl From<std::io::Error> for NatError {
+    fn from(err: std::io::Error) -> Self {
+        Self::Io(err)
+    }
+}
+
+impl From<super::stun::StunError> for NatError {
+    fn from(err: super::stun::StunError) -> Self {
+        match err {
+            super::stun::StunError::Io(e) => Self::Io(e),
+            super::stun::StunError::Timeout => Self::Timeout,
+            _ => Self::InvalidResponse,
+        }
+    }
+}
+
+/// NAT type detector
+///
+/// Uses multiple STUN servers to probe NAT behavior and classify the NAT type.
+pub struct NatDetector {
+    stun_servers: Vec<SocketAddr>,
+}
+
+impl NatDetector {
+    /// Create a new NAT detector with default STUN servers
+    ///
+    /// Uses multiple public STUN servers from different providers for redundancy.
+    /// Uses fallback IPs for reliability (DNS may be blocked/filtered).
+    /// For DNS-based resolution, use `with_dns_resolution()` instead.
+    ///
+    /// Providers included:
+    /// - Cloudflare (stun.cloudflare.com:3478)
+    /// - Twilio (global.stun.twilio.com:3478)
+    /// - Nextcloud (stun.nextcloud.com:443)
+    /// - Google (stun.l.google.com:19302)
+    ///
+    /// Different ports (3478, 443, 19302) increase chance of bypassing firewalls.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            stun_servers: fallback_stun_ips(),
+        }
+    }
+
+    /// Create a NAT detector with custom STUN servers
+    #[must_use]
+    pub fn with_servers(servers: Vec<SocketAddr>) -> Self {
+        Self {
+            stun_servers: servers,
+        }
+    }
+
+    /// Create a NAT detector with DNS resolution for STUN servers
+    ///
+    /// Resolves STUN server hostnames using DNS, with fallback to hardcoded IPs
+    /// if DNS resolution fails. This is preferred when DNS is available, as it
+    /// allows STUN servers to update their IPs without requiring client updates.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if DNS resolver initialization fails
+    pub async fn with_dns_resolution(specs: &[StunServerSpec]) -> Result<Self, NatError> {
+        let resolver = StunDnsResolver::new()
+            .await
+            .map_err(|e| NatError::Io(std::io::Error::other(e.to_string())))?;
+
+        let mut resolved_servers = resolver.resolve_many(specs).await;
+
+        // If DNS resolution failed for all servers, use fallback IPs
+        if resolved_servers.is_empty() {
+            resolved_servers = fallback_stun_ips();
+        }
+
+        Ok(Self {
+            stun_servers: resolved_servers,
+        })
+    }
+
+    /// Create a NAT detector with default STUN servers using DNS resolution
+    ///
+    /// Attempts DNS resolution for well-known STUN servers, falling back to
+    /// hardcoded IPs if DNS is unavailable.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if DNS resolver initialization fails
+    pub async fn with_default_dns_resolution() -> Result<Self, NatError> {
+        let specs = super::dns::default_stun_servers();
+        Self::with_dns_resolution(&specs).await
+    }
+
+    /// Detect NAT type using STUN probing
+    ///
+    /// This performs a series of STUN queries to classify the NAT device:
+    /// 1. Query local address to check if it's public
+    /// 2. Query from same socket to different servers (check for symmetric NAT)
+    /// 3. Query from different sockets to same server (check port mapping)
+    ///
+    /// # Errors
+    ///
+    /// Returns `NatError` if:
+    /// - No STUN servers are configured
+    /// - All STUN queries fail
+    /// - Network I/O errors occur
+    pub async fn detect(&self) -> Result<NatType, NatError> {
+        if self.stun_servers.is_empty() {
+            return Err(NatError::NoServers);
+        }
+
+        // Test 1: Create socket and get external address from first STUN server
+        let client1 = StunClient::bind("0.0.0.0:0").await?;
+        let local_addr1 = client1.local_addr()?;
+
+        let external1 = client1.get_mapped_address(self.stun_servers[0]).await?;
+
+        // Check if we have a public IP (no NAT)
+        if Self::is_public_ip(&local_addr1.ip()) && local_addr1.ip() == external1.ip() {
+            return Ok(NatType::Open);
+        }
+
+        // Test 2: Query from same socket to different server
+        if self.stun_servers.len() > 1 {
+            let external2 = client1.get_mapped_address(self.stun_servers[1]).await?;
+
+            // If external addresses differ, it's symmetric NAT
+            if external1 != external2 {
+                return Ok(NatType::Symmetric);
+            }
+        }
+
+        // Test 3: Use different local socket, same server
+        let client2 = StunClient::bind("0.0.0.0:0").await?;
+        let external3 = client2.get_mapped_address(self.stun_servers[0]).await?;
+
+        // Check if external port changes with local port
+        if external1.port() != external3.port() {
+            // Port changes -> Port Restricted Cone or Symmetric
+            // We already ruled out Symmetric above, so it's Port Restricted
+            return Ok(NatType::PortRestrictedCone);
+        }
+
+        // Test 4: Check if we can receive from different IP
+        // This would require a more complex STUN implementation with CHANGE-REQUEST
+        // For now, we default to Restricted Cone as it's the most common
+
+        Ok(NatType::RestrictedCone)
+    }
+
+    /// Check if an IP address is public (not private/loopback/link-local)
+    fn is_public_ip(ip: &IpAddr) -> bool {
+        match ip {
+            IpAddr::V4(ipv4) => !ipv4.is_private() && !ipv4.is_loopback() && !ipv4.is_link_local(),
+            IpAddr::V6(ipv6) => !ipv6.is_loopback() && !ipv6.is_multicast(),
+        }
+    }
+}
+
+impl Default for NatDetector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_nat_type_display() {
+        assert_eq!(NatType::Open.to_string(), "Open (No NAT)");
+        assert_eq!(NatType::FullCone.to_string(), "Full Cone NAT");
+        assert_eq!(NatType::Symmetric.to_string(), "Symmetric NAT");
+    }
+
+    #[test]
+    fn test_is_public_ip() {
+        // Private IPs
+        assert!(!NatDetector::is_public_ip(&"192.168.1.1".parse().unwrap()));
+        assert!(!NatDetector::is_public_ip(&"10.0.0.1".parse().unwrap()));
+        assert!(!NatDetector::is_public_ip(&"172.16.0.1".parse().unwrap()));
+
+        // Loopback
+        assert!(!NatDetector::is_public_ip(&"127.0.0.1".parse().unwrap()));
+
+        // Link-local
+        assert!(!NatDetector::is_public_ip(&"169.254.1.1".parse().unwrap()));
+
+        // Public IPs
+        assert!(NatDetector::is_public_ip(&"8.8.8.8".parse().unwrap()));
+        assert!(NatDetector::is_public_ip(&"203.0.113.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn test_nat_detector_creation() {
+        let detector = NatDetector::new();
+        assert_eq!(detector.stun_servers.len(), 5);
+
+        let custom_servers = vec!["1.1.1.1:3478".parse().unwrap()];
+        let detector = NatDetector::with_servers(custom_servers);
+        assert_eq!(detector.stun_servers.len(), 1);
+    }
+
+    #[test]
+    fn test_nat_error_display() {
+        let err = NatError::Timeout;
+        assert_eq!(err.to_string(), "STUN server timeout");
+
+        let err = NatError::NoServers;
+        assert_eq!(err.to_string(), "No STUN servers available");
+    }
+
+    #[test]
+    fn test_nat_error_from_io_error() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::TimedOut, "timeout");
+        let nat_err: NatError = io_err.into();
+        assert!(matches!(nat_err, NatError::Io(_)));
+    }
+
+    #[test]
+    fn test_nat_error_from_stun_error() {
+        use super::super::stun::StunError;
+
+        let stun_timeout: NatError = StunError::Timeout.into();
+        assert!(matches!(stun_timeout, NatError::Timeout));
+
+        let stun_invalid: NatError = StunError::InvalidMagicCookie.into();
+        assert!(matches!(stun_invalid, NatError::InvalidResponse));
+    }
+
+    #[test]
+    fn test_nat_type_equality() {
+        assert_eq!(NatType::Open, NatType::Open);
+        assert_ne!(NatType::Open, NatType::Symmetric);
+        assert_ne!(NatType::FullCone, NatType::RestrictedCone);
+    }
+
+    #[test]
+    fn test_is_public_ip_ipv6() {
+        // IPv6 loopback
+        assert!(!NatDetector::is_public_ip(&"::1".parse().unwrap()));
+
+        // IPv6 multicast
+        assert!(!NatDetector::is_public_ip(&"ff02::1".parse().unwrap()));
+
+        // IPv6 public (Google DNS)
+        assert!(NatDetector::is_public_ip(
+            &"2001:4860:4860::8888".parse().unwrap()
+        ));
+    }
+
+    #[test]
+    fn test_is_public_ip_edge_cases() {
+        // Class E (reserved)
+        assert!(NatDetector::is_public_ip(&"240.0.0.1".parse().unwrap())); // Technically reserved but not checked
+
+        // Documentation ranges
+        assert!(NatDetector::is_public_ip(&"203.0.113.1".parse().unwrap()));
+        assert!(NatDetector::is_public_ip(&"198.51.100.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn test_nat_detector_default() {
+        let detector = NatDetector::default();
+        assert_eq!(detector.stun_servers.len(), 5);
+    }
+
+    #[test]
+    fn test_nat_detector_empty_servers() {
+        let detector = NatDetector::with_servers(vec![]);
+        assert_eq!(detector.stun_servers.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_nat_detect_no_servers() {
+        let detector = NatDetector::with_servers(vec![]);
+        let result = detector.detect().await;
+        assert!(matches!(result, Err(NatError::NoServers)));
+    }
+
+    #[test]
+    fn test_nat_type_display_all() {
+        assert_eq!(NatType::Open.to_string(), "Open (No NAT)");
+        assert_eq!(NatType::FullCone.to_string(), "Full Cone NAT");
+        assert_eq!(NatType::RestrictedCone.to_string(), "Restricted Cone NAT");
+        assert_eq!(
+            NatType::PortRestrictedCone.to_string(),
+            "Port Restricted Cone NAT"
+        );
+        assert_eq!(NatType::Symmetric.to_string(), "Symmetric NAT");
+        assert_eq!(NatType::Unknown.to_string(), "Unknown NAT Type");
+    }
+
+    #[test]
+    fn test_nat_type_copy() {
+        let t = NatType::FullCone;
+        let t2 = t;
+        assert_eq!(t, t2);
+    }
+
+    #[test]
+    fn test_nat_type_clone() {
+        let t = NatType::Symmetric;
+        let t2 = t.clone();
+        assert_eq!(t, t2);
+    }
+
+    #[test]
+    fn test_nat_error_display_all() {
+        let io_err = NatError::Io(std::io::Error::new(std::io::ErrorKind::Other, "test"));
+        assert!(io_err.to_string().contains("test"));
+
+        assert_eq!(NatError::Timeout.to_string(), "STUN server timeout");
+        assert_eq!(
+            NatError::InvalidResponse.to_string(),
+            "Invalid STUN response"
+        );
+        assert_eq!(NatError::NoServers.to_string(), "No STUN servers available");
+    }
+
+    #[test]
+    fn test_nat_error_source() {
+        let io_err = NatError::Io(std::io::Error::new(std::io::ErrorKind::Other, "test"));
+        assert!(std::error::Error::source(&io_err).is_some());
+
+        let timeout = NatError::Timeout;
+        assert!(std::error::Error::source(&timeout).is_none());
+
+        let invalid = NatError::InvalidResponse;
+        assert!(std::error::Error::source(&invalid).is_none());
+
+        let no_servers = NatError::NoServers;
+        assert!(std::error::Error::source(&no_servers).is_none());
+    }
+
+    #[test]
+    fn test_nat_error_debug() {
+        let err = NatError::Timeout;
+        let debug = format!("{:?}", err);
+        assert!(debug.contains("Timeout"));
+    }
+
+    #[test]
+    fn test_nat_detector_with_servers_many() {
+        let servers: Vec<SocketAddr> = (1..=10)
+            .map(|i| format!("10.0.0.{}:3478", i).parse().unwrap())
+            .collect();
+        let detector = NatDetector::with_servers(servers.clone());
+        assert_eq!(detector.stun_servers.len(), 10);
+    }
+
+    #[test]
+    fn test_is_public_ip_more_private() {
+        // 172.16-31 range
+        assert!(!NatDetector::is_public_ip(
+            &"172.31.255.255".parse().unwrap()
+        ));
+        assert!(NatDetector::is_public_ip(&"172.32.0.1".parse().unwrap()));
+    }
+
+    #[test]
+    fn test_nat_error_from_stun_io_error() {
+        use super::super::stun::StunError;
+
+        let io_inner = std::io::Error::new(std::io::ErrorKind::ConnectionReset, "reset");
+        let stun_io: NatError = StunError::Io(io_inner).into();
+        assert!(matches!(stun_io, NatError::Io(_)));
+    }
+
+    #[test]
+    fn test_nat_type_all_variants() {
+        // Ensure all NAT types can be created and compared
+        let types = vec![
+            NatType::Open,
+            NatType::FullCone,
+            NatType::RestrictedCone,
+            NatType::PortRestrictedCone,
+            NatType::Symmetric,
+            NatType::Unknown,
+        ];
+
+        for typ in types {
+            let display = typ.to_string();
+            assert!(!display.is_empty());
+        }
+    }
+}

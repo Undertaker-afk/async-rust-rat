@@ -2,6 +2,49 @@
 members = ["server/src-tauri", "client", "common"]
 resolver = "2"
 
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT"
+repository = "https://github.com/your-org/wraith"
+authors = ["WRAITH Team"]
+
+[workspace.dependencies]
+# Internal workspace crates
+wraith-core = { path = "common/wraith/core" }
+wraith-transport = { path = "common/wraith/transport" }
+wraith-crypto = { path = "common/wraith/crypto" }
+wraith-discovery = { path = "common/wraith/discovery" }
+wraith-files = { path = "common/wraith/files" }
+wraith-obfuscation = { path = "common/wraith/obfuscation" }
+
+# External dependencies
+tokio = { version = "1.35", features = ["full"] }
+thiserror = "1.0"
+tracing = "0.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+blake3 = "1.5"
+zeroize = { version = "1.7", features = ["derive"] }
+getrandom = "0.2"
+rand = "0.8"
+rand_core = "0.6"
+rand_distr = "0.4"
+hex = "0.4"
+dashmap = "5.5"
+socket2 = "0.5"
+crossbeam-queue = "0.3"
+bincode = "1.3"
+base64 = "0.21"
+
+# Dev dependencies
+proptest = "1.4"
+criterion = "0.5"
+
+# Platform-specific
+io-uring = { version = "0.6" }
+
 [profile.release]
 strip = true
 opt-level = "z"

@@ -74,6 +74,8 @@ pub enum ServerCommand {
     GetClients(OSender<Vec<ClientInfo>>),
     GetClient(SocketAddr, OSender<Option<ClientInfo>>),
     SetTauriHandle(AppHandle),
+    SetWraithNode(wraith_core::Node),
+    WraithPacket([u8; 32], ServerboundPacket),
     ClientDisconnected(SocketAddr),
     CloseClientSessions(),
 

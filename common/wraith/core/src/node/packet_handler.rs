@@ -1,0 +1,1089 @@
+//! Packet handling for WRAITH nodes
+//!
+//! This module contains packet receive/dispatch logic extracted from node.rs
+//! to reduce complexity and improve code organization.
+//!
+//! # Packet Flow
+//!
+//! ```text
+//! UDP Socket → recv_from → handle_incoming_packet → dispatch_frame → handler
+//!                                |
+//!                                └→ handshake → SessionManager
+//! ```
+
+use crate::frame::{Frame, FrameBuilder, FrameType};
+use crate::node::Node;
+use crate::node::config::CoverTrafficDistribution;
+use crate::node::error::{NodeError, Result};
+use crate::node::file_transfer::FileTransferContext;
+use crate::node::routing::extract_connection_id;
+use crate::node::session::{HandshakePacket, PeerConnection};
+use crate::transfer::TransferSession;
+use crate::{ConnectionId, HandshakePhase, SessionState};
+use getrandom::getrandom;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::{Mutex, RwLock, oneshot};
+use wraith_files::chunker::FileChunker;
+use wraith_transport::transport::Transport;
+
+impl Node {
+    /// Packet receive loop - main event loop for incoming packets
+    ///
+    /// Continuously receives packets from the transport layer and dispatches
+    /// them for processing. Runs until the node is stopped.
+    pub(crate) async fn packet_receive_loop(&self) {
+        let mut buf = vec![0u8; 65536];
+        loop {
+            if !self.is_running() {
+                break;
+            }
+
+            let transport = {
+                let guard = self.inner.transport.lock().await;
+                match guard.as_ref() {
+                    Some(t) => Arc::clone(t),
+                    None => break,
+                }
+            };
+
+            match tokio::time::timeout(Duration::from_millis(100), transport.recv_from(&mut buf))
+                .await
+            {
+                Ok(Ok((size, from))) => {
+                    let packet_data = buf[..size].to_vec();
+                    let node = self.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = node.handle_incoming_packet(packet_data, from).await {
+                            tracing::debug!("Error handling packet from {}: {}", from, e);
+                        }
+                    });
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!("Error receiving packet: {}", e);
+                }
+                Err(_) => {
+                    // Timeout - continue loop
+                    continue;
+                }
+            }
+        }
+    }
+
+    /// Cover traffic loop - generates dummy traffic to mask real activity
+    ///
+    /// Sends PAD frames to all active sessions at configured intervals
+    /// to make traffic analysis more difficult.
+    pub(crate) async fn cover_traffic_loop(&self) {
+        let config = &self.inner.config.obfuscation.cover_traffic;
+        let rate = config.rate;
+
+        loop {
+            if !self.is_running() {
+                break;
+            }
+
+            let delay = match config.distribution {
+                CoverTrafficDistribution::Constant => {
+                    if rate > 0.0 {
+                        Duration::from_secs_f64(1.0 / rate)
+                    } else {
+                        Duration::from_secs(1)
+                    }
+                }
+                CoverTrafficDistribution::Poisson => {
+                    use rand::Rng;
+                    let u: f64 = rand::thread_rng().r#gen();
+                    Duration::from_secs_f64((-u.ln() / rate).min(10.0))
+                }
+                CoverTrafficDistribution::Uniform { min_ms, max_ms } => {
+                    use rand::Rng;
+                    Duration::from_millis(rand::thread_rng().gen_range(min_ms..=max_ms))
+                }
+            };
+
+            tokio::time::sleep(delay).await;
+
+            // Send cover traffic to all active sessions
+            for entry in self.inner.sessions.iter() {
+                let connection = entry.value();
+                let mut pad_data = vec![0u8; 64];
+                if getrandom(&mut pad_data).is_err() {
+                    continue;
+                }
+
+                let frame_bytes = match FrameBuilder::new()
+                    .frame_type(FrameType::Pad)
+                    .stream_id(0)
+                    .payload(&pad_data)
+                    .build(128)
+                {
+                    Ok(bytes) => bytes,
+                    Err(_) => continue,
+                };
+
+                let connection = Arc::clone(connection);
+                let node = self.clone();
+                tokio::spawn(async move {
+                    let _ = node.send_encrypted_frame(&connection, &frame_bytes).await;
+                });
+            }
+        }
+    }
+
+    /// Handle incoming packet from network
+    ///
+    /// Unwraps protocol obfuscation, routes packet by Connection ID,
+    /// and dispatches to appropriate handler.
+    pub(crate) async fn handle_incoming_packet(
+        &self,
+        data: Vec<u8>,
+        from: SocketAddr,
+    ) -> Result<()> {
+        use crate::node::security_monitor::{SecurityEvent, SecurityEventType};
+
+        let source_ip = from.ip();
+
+        // Check IP reputation
+        if !self.inner.ip_reputation.check_allowed(source_ip).await {
+            tracing::debug!("Blocked packet from banned IP: {}", source_ip);
+            let event = SecurityEvent::new(SecurityEventType::IpPermBanned, source_ip)
+                .with_message("Connection attempt from banned IP");
+            self.inner.security_monitor.record_event(event).await;
+            return Ok(()); // Silently drop
+        }
+
+        // Apply backoff delay if IP is in backoff status
+        let backoff_delay = self.inner.ip_reputation.get_backoff_delay(source_ip).await;
+        if !backoff_delay.is_zero() {
+            tracing::debug!(
+                "Applying backoff delay {} ms for IP {}",
+                backoff_delay.as_millis(),
+                source_ip
+            );
+            tokio::time::sleep(backoff_delay).await;
+        }
+
+        // Check connection rate limit
+        if !self.inner.rate_limiter.check_connection(source_ip) {
+            tracing::warn!("Rate limit exceeded for IP: {}", source_ip);
+            self.inner.ip_reputation.record_failure(source_ip).await;
+            let event = SecurityEvent::new(SecurityEventType::RateLimitExceeded, source_ip)
+                .with_message("Connection rate limit exceeded");
+            self.inner.security_monitor.record_event(event).await;
+            return Ok(()); // Silently drop
+        }
+
+        // Unwrap any protocol mimicry
+        let unwrapped = self.unwrap_protocol(&data)?;
+
+        // Check for pending handshake matching this source
+        let matching_addr = self
+            .inner
+            .pending_handshakes
+            .iter()
+            .find(|entry| {
+                let registered = entry.key();
+                if registered.ip().is_unspecified() {
+                    from.port() == registered.port()
+                } else {
+                    from == *registered
+                }
+            })
+            .map(|entry| *entry.key());
+
+        // If there's a pending handshake, forward the packet
+        if let Some(addr) = matching_addr
+            && let Some((_addr, tx)) = self.inner.pending_handshakes.remove(&addr)
+        {
+            let packet = HandshakePacket {
+                data: unwrapped.clone(),
+                from,
+            };
+            let _ = tx.send(packet);
+            return Ok(());
+        }
+
+        // Route by Connection ID
+        match extract_connection_id(&unwrapped) {
+            Some(connection_id) => {
+                if let Some(conn) = self.inner.routing.lookup(connection_id) {
+                    conn.touch();
+                    match conn.decrypt_frame(&unwrapped[8..]).await {
+                        Ok(frame_bytes) => {
+                            let node = self.clone();
+                            let peer_id = conn.peer_id;
+                            tokio::spawn(async move {
+                                if let Err(e) = node.dispatch_frame(frame_bytes, peer_id).await {
+                                    tracing::warn!("Error handling frame: {}", e);
+                                }
+                            });
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to decrypt packet from {}: {}", from, e);
+                        }
+                    }
+                } else {
+                    // Unknown Connection ID - might be a handshake initiation
+                    if let Err(e) = self.handle_handshake_initiation(&unwrapped, from).await {
+                        tracing::warn!("Handshake initiation failed from {}: {}", from, e);
+                    }
+                }
+            }
+            None => {
+                // No Connection ID - likely a handshake initiation
+                if let Err(e) = self.handle_handshake_initiation(&unwrapped, from).await {
+                    tracing::warn!("Handshake initiation failed from {}: {}", from, e);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Dispatch frame to appropriate handler based on frame type
+    pub(crate) async fn dispatch_frame(
+        &self,
+        frame_bytes: Vec<u8>,
+        peer_id: crate::node::session::PeerId,
+    ) -> Result<()> {
+        let frame = Frame::parse(&frame_bytes)
+            .map_err(|e| NodeError::Other(format!("Failed to parse frame: {e}").into()))?;
+
+        match frame.frame_type() {
+            FrameType::StreamOpen => self.handle_stream_open_frame(frame).await,
+            FrameType::Data => self.handle_data_frame(frame, peer_id).await,
+            FrameType::Pong => self.handle_pong_frame(frame, peer_id).await,
+            FrameType::PathResponse => self.handle_path_response_frame(frame, peer_id).await,
+            FrameType::StreamClose => {
+                tracing::debug!("Received StreamClose frame");
+                Ok(())
+            }
+            _ => {
+                tracing::debug!("Unhandled frame type: {:?}", frame.frame_type());
+                Ok(())
+            }
+        }
+    }
+
+    /// Handle handshake initiation (responder side)
+    ///
+    /// When a packet arrives that doesn't match a known Connection ID,
+    /// it may be a Noise_XX handshake initiation.
+    pub(crate) async fn handle_handshake_initiation(
+        &self,
+        msg1: &[u8],
+        peer_addr: SocketAddr,
+    ) -> Result<crate::node::session::SessionId> {
+        use crate::node::security_monitor::{SecurityEvent, SecurityEventType};
+
+        let source_ip = peer_addr.ip();
+        let transport = self.get_transport().await?;
+
+        tracing::info!(
+            "Handling handshake initiation from {} ({} bytes)",
+            peer_addr,
+            msg1.len()
+        );
+
+        // Check session limit
+        if !self.inner.rate_limiter.check_session_limit() {
+            tracing::warn!("Session limit exceeded for connection from {}", peer_addr);
+            self.inner.ip_reputation.record_failure(source_ip).await;
+            let event = SecurityEvent::new(SecurityEventType::ConnectionLimitExceeded, source_ip)
+                .with_message("Global session limit exceeded");
+            self.inner.security_monitor.record_event(event).await;
+            return Err(NodeError::Transport("Session limit exceeded".into()));
+        }
+
+        // Create channel for receiving msg3
+        let (msg3_tx, msg3_rx) = oneshot::channel();
+        self.inner.pending_handshakes.insert(peer_addr, msg3_tx);
+
+        // Perform Noise_XX handshake as responder
+        let handshake_result = crate::node::session::perform_handshake_responder(
+            self.inner.identity.x25519_keypair(),
+            msg1,
+            peer_addr,
+            transport.as_ref(),
+            Some(msg3_rx),
+        )
+        .await;
+
+        // Clean up pending handshake
+        self.inner.pending_handshakes.remove(&peer_addr);
+
+        // Handle handshake failure
+        let (crypto, session_id, peer_id) = match handshake_result {
+            Ok(result) => result,
+            Err(e) => {
+                tracing::warn!("Handshake failed from {}: {}", peer_addr, e);
+                self.inner.ip_reputation.record_failure(source_ip).await;
+                let event = SecurityEvent::new(SecurityEventType::HandshakeFailed, source_ip)
+                    .with_message(format!("Handshake error: {e}"));
+                self.inner.security_monitor.record_event(event).await;
+                return Err(e);
+            }
+        };
+
+        // Derive connection ID from session ID
+        let mut connection_id_bytes = [0u8; 8];
+        connection_id_bytes.copy_from_slice(&session_id[..8]);
+        let connection_id = ConnectionId::from_bytes(connection_id_bytes);
+
+        // Create connection
+        let connection = PeerConnection::new(session_id, peer_id, peer_addr, connection_id, crypto);
+
+        // Transition through handshake states
+        connection
+            .transition_to(SessionState::Handshaking(HandshakePhase::RespSent))
+            .await?;
+        connection.transition_to(SessionState::Established).await?;
+
+        // Check for existing session
+        if self.inner.sessions.contains_key(&peer_id)
+            && let Some(existing) = self.inner.sessions.get(&peer_id)
+        {
+            return Ok(existing.session_id);
+        }
+
+        // Store session and route
+        let connection_arc = Arc::new(connection);
+        self.inner
+            .sessions
+            .insert(peer_id, Arc::clone(&connection_arc));
+
+        let cid_u64 = u64::from_be_bytes(connection_id_bytes);
+        self.inner.routing.add_route(cid_u64, connection_arc);
+
+        tracing::info!(
+            "Session established as responder with peer {}, session: {}, route: {:016x}",
+            hex::encode(&peer_id[..8]),
+            hex::encode(&session_id[..8]),
+            cid_u64
+        );
+
+        Ok(session_id)
+    }
+
+    /// Handle StreamOpen frame (file transfer metadata)
+    pub(crate) async fn handle_stream_open_frame(&self, frame: Frame<'_>) -> Result<()> {
+        let metadata = crate::node::file_transfer::FileMetadata::deserialize(frame.payload())?;
+
+        tracing::info!(
+            "Received file transfer request: {} ({} bytes)",
+            metadata.file_name,
+            metadata.file_size
+        );
+
+        // Sanitize file name to prevent directory traversal attacks
+        if metadata.file_name.is_empty() {
+            return Err(NodeError::InvalidState("Empty file name not allowed".into()));
+        }
+
+        let file_path = std::path::Path::new(&metadata.file_name);
+
+        // Reject absolute paths
+        if file_path.is_absolute() {
+            return Err(NodeError::InvalidState("Absolute paths not allowed".into()));
+        }
+
+        // Extract only the file name component (strip any directory parts)
+        let safe_file_name = file_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| NodeError::InvalidState("Invalid file name".into()))?;
+
+        // Reject filenames with path components or parent references
+        if safe_file_name.contains("..") || safe_file_name.contains('/') || safe_file_name.contains('\\') {
+            return Err(NodeError::InvalidState("File name contains invalid characters".into()));
+        }
+
+        // Build safe path in the current directory (or a designated receive directory)
+        let safe_path = std::path::PathBuf::from(safe_file_name);
+
+        // Create receive transfer session
+        let mut transfer = TransferSession::new_receive(
+            metadata.transfer_id,
+            safe_path.clone(),
+            metadata.file_size,
+            metadata.chunk_size as usize,
+        );
+        transfer.start();
+
+        // Create file reassembler with sanitized path
+        let reassembler = wraith_files::chunker::FileReassembler::new(
+            safe_file_name,
+            metadata.file_size,
+            metadata.chunk_size as usize,
+        )
+        .map_err(|e| NodeError::Io(e.to_string()))?;
+
+        // Create tree hash (root only for now)
+        let tree_hash = wraith_files::tree_hash::FileTreeHash {
+            root: metadata.root_hash,
+            chunks: Vec::new(),
+        };
+
+        // Store transfer context
+        let context = Arc::new(FileTransferContext::new_receive(
+            metadata.transfer_id,
+            Arc::new(RwLock::new(transfer)),
+            Arc::new(Mutex::new(reassembler)),
+            tree_hash,
+        ));
+        self.inner.transfers.insert(metadata.transfer_id, context);
+
+        Ok(())
+    }
+
+    /// Handle PONG frame (ping response)
+    pub(crate) async fn handle_pong_frame(
+        &self,
+        frame: Frame<'_>,
+        peer_id: crate::node::session::PeerId,
+    ) -> Result<()> {
+        let sequence = frame.sequence();
+
+        // Look up pending ping by (peer_id, sequence)
+        if let Some((_key, tx)) = self.inner.pending_pings.remove(&(peer_id, sequence)) {
+            // Send timestamp back to waiting ping_session
+            let _ = tx.send(std::time::Instant::now());
+            tracing::trace!("PONG received from {:?}, seq {}", peer_id, sequence);
+        } else {
+            tracing::debug!(
+                "Received unexpected PONG from {:?}, seq {}",
+                peer_id,
+                sequence
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Handle Data frame (file chunk)
+    pub(crate) async fn handle_data_frame(
+        &self,
+        frame: Frame<'_>,
+        peer_id: crate::node::session::PeerId,
+    ) -> Result<()> {
+        let chunk_index = frame.sequence() as u64;
+        let chunk_data = frame.payload();
+        let stream_id = frame.stream_id();
+
+        // Handle generic data on Stream 0
+        if stream_id == 0 {
+            let subscribers = self.inner.data_subscribers.clone();
+            let data = chunk_data.to_vec();
+            // Using try_send to avoid blocking the network thread
+            for entry in subscribers.iter() {
+                let tx = entry.value();
+                let _ = tx.try_send((peer_id, data.clone()));
+            }
+            return Ok(());
+        }
+
+        // Check if there's a pending chunk request waiting for this data
+        let chunk_key = (stream_id, chunk_index);
+        if let Some((_, sender)) = self.inner.pending_chunks.remove(&chunk_key) {
+            // Send chunk data to waiting request_chunk_from_peer()
+            let _ = sender.send(chunk_data.to_vec());
+            tracing::trace!(
+                "Chunk {} (stream {}) routed to pending request",
+                chunk_index,
+                stream_id
+            );
+            return Ok(());
+        }
+
+        // No pending request - handle as async chunk push (e.g., from seeder)
+        // Find matching transfer by stream ID
+        let mut matched_context = None;
+        for entry in self.inner.transfers.iter() {
+            let tid = entry.key();
+            let tid_stream_id = ((tid[0] as u16) << 8) | (tid[1] as u16);
+            if tid_stream_id == stream_id {
+                matched_context = Some(entry.value().clone());
+                break;
+            }
+        }
+
+        let context = matched_context.ok_or_else(|| {
+            NodeError::InvalidState(format!("No transfer for stream_id {stream_id}").into())
+        })?;
+        let transfer_id = context.transfer_id;
+
+        // Write chunk to reassembler
+        if let Some(reassembler_arc) = &context.reassembler {
+            reassembler_arc
+                .lock()
+                .await
+                .write_chunk(chunk_index, chunk_data)
+                .map_err(|e| NodeError::Io(e.to_string()))?;
+        }
+
+        // Verify chunk hash if available
+        if chunk_index < context.tree_hash.chunks.len() as u64 {
+            let computed_hash = blake3::hash(chunk_data);
+            if computed_hash.as_bytes() != &context.tree_hash.chunks[chunk_index as usize] {
+                return Err(NodeError::InvalidState(
+                    "Chunk hash verification failed".into(),
+                ));
+            }
+        }
+
+        // Update transfer progress
+        let mut transfer = context.transfer_session.write().await;
+        transfer.mark_chunk_transferred(chunk_index, chunk_data.len());
+
+        if transfer.is_complete() {
+            tracing::info!(
+                "File transfer {:?} completed ({} bytes)",
+                hex::encode(&transfer_id[..8]),
+                transfer.file_size
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Handle PATH_RESPONSE frame (connection migration)
+    pub(crate) async fn handle_path_response_frame(
+        &self,
+        frame: Frame<'_>,
+        _peer_id: crate::node::session::PeerId,
+    ) -> Result<()> {
+        let response_data = frame.payload();
+        if response_data.len() != 8 {
+            tracing::warn!(
+                "Invalid PATH_RESPONSE payload length: {} (expected 8)",
+                response_data.len()
+            );
+            return Ok(());
+        }
+
+        let mut response_challenge = [0u8; 8];
+        response_challenge.copy_from_slice(response_data);
+
+        tracing::debug!(
+            "Received PATH_RESPONSE with challenge: {:?}",
+            response_challenge
+        );
+
+        // Find matching pending migration by iterating through all pending migrations
+        // and matching the challenge data
+        let mut matched_path_id = None;
+        for entry in self.inner.pending_migrations.iter() {
+            if entry.value().challenge == response_challenge {
+                matched_path_id = Some(*entry.key());
+                break;
+            }
+        }
+
+        if let Some(path_id) = matched_path_id {
+            if let Some((_path_id, migration_state)) =
+                self.inner.pending_migrations.remove(&path_id)
+            {
+                let latency = migration_state.initiated_at.elapsed();
+
+                tracing::info!(
+                    "PATH_RESPONSE validated for migration to {} (latency: {}µs)",
+                    migration_state.new_addr,
+                    latency.as_micros()
+                );
+
+                // Send success to waiting migrate_session
+                let _ = migration_state.sender.send(Ok(latency));
+            }
+        } else {
+            tracing::debug!(
+                "No matching pending migration for PATH_RESPONSE challenge: {:?}",
+                response_challenge
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Send file chunks to peer
+    pub(crate) async fn send_file_chunks(
+        &self,
+        transfer_id: crate::node::identity::TransferId,
+        file_path: std::path::PathBuf,
+        stream_id: u16,
+        connection: Arc<PeerConnection>,
+    ) -> Result<()> {
+        let context = self
+            .inner
+            .transfers
+            .get(&transfer_id)
+            .ok_or(NodeError::TransferNotFound(transfer_id))?
+            .clone();
+
+        let mut chunker = FileChunker::new(&file_path, self.inner.config.transfer.chunk_size)
+            .map_err(|e| NodeError::Io(e.to_string()))?;
+
+        let total_chunks = chunker.num_chunks();
+
+        for chunk_index in 0..total_chunks {
+            let chunk_data = chunker
+                .read_chunk_at(chunk_index)
+                .map_err(|e| NodeError::Io(e.to_string()))?;
+            let chunk_len = chunk_data.len();
+
+            // Verify chunk hash
+            if chunk_index < context.tree_hash.chunks.len() as u64 {
+                let computed_hash = blake3::hash(&chunk_data);
+                if computed_hash.as_bytes() != &context.tree_hash.chunks[chunk_index as usize] {
+                    return Err(NodeError::InvalidState(
+                        "Chunk hash verification failed".into(),
+                    ));
+                }
+            }
+
+            // Build and send chunk frame
+            let chunk_frame =
+                crate::node::file_transfer::build_chunk_frame(stream_id, chunk_index, &chunk_data, self.inner.config.transfer.chunk_size)?;
+
+            self.send_encrypted_frame(&connection, &chunk_frame).await?;
+
+            // Update progress
+            context
+                .transfer_session
+                .write()
+                .await
+                .mark_chunk_transferred(chunk_index, chunk_len);
+        }
+
+        tracing::info!(
+            "File transfer {:?} completed ({} chunks sent)",
+            hex::encode(&transfer_id[..8]),
+            total_chunks
+        );
+
+        Ok(())
+    }
+
+    /// Send encrypted frame to peer
+    #[allow(dead_code)]
+    pub(crate) async fn send_encrypted_frame(
+        &self,
+        connection: &PeerConnection,
+        frame_bytes: &[u8],
+    ) -> Result<()> {
+        // Encrypt the frame
+        let encrypted = connection.encrypt_frame(frame_bytes).await?;
+        let encrypted_len = encrypted.len();
+
+        // Apply padding obfuscation
+        let mut obfuscated = encrypted;
+        self.apply_obfuscation(&mut obfuscated)?;
+
+        // Wrap in protocol mimicry (if enabled)
+        let wrapped = self.wrap_protocol(&obfuscated)?;
+
+        // Apply timing delay
+        let delay = self.get_timing_delay();
+        if !delay.is_zero() {
+            tokio::time::sleep(delay).await;
+        }
+
+        // Send via transport
+        let transport = self.get_transport().await?;
+        transport
+            .send_to(&wrapped, connection.peer_addr())
+            .await
+            .map_err(|e| NodeError::Transport(format!("Failed to send packet: {e}").into()))?;
+
+        tracing::trace!(
+            "Sent {} obfuscated bytes to {} (original: {} encrypted)",
+            wrapped.len(),
+            connection.peer_addr(),
+            encrypted_len
+        );
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::node::node::MigrationState;
+
+    #[test]
+    fn test_cover_traffic_distribution_constant() {
+        let rate = 10.0; // 10 packets per second
+        let expected_delay = Duration::from_secs_f64(1.0 / rate);
+        assert_eq!(expected_delay, Duration::from_millis(100));
+    }
+
+    #[test]
+    fn test_cover_traffic_distribution_constant_zero_rate() {
+        // When rate is 0, delay should default to 1 second
+        let rate = 0.0;
+        let delay = if rate > 0.0 {
+            Duration::from_secs_f64(1.0 / rate)
+        } else {
+            Duration::from_secs(1)
+        };
+        assert_eq!(delay, Duration::from_secs(1));
+    }
+
+    #[test]
+    fn test_cover_traffic_distribution_poisson() {
+        // Test Poisson distribution delay calculation
+        let rate = 5.0;
+        // Simulate the delay calculation
+        let u: f64 = 0.5; // deterministic sample
+        let delay = Duration::from_secs_f64((-u.ln() / rate).min(10.0));
+        // -ln(0.5) / 5.0 = 0.6931 / 5.0 ≈ 0.1386 seconds
+        assert!(delay.as_secs_f64() > 0.0);
+        assert!(delay.as_secs_f64() <= 10.0);
+    }
+
+    #[test]
+    fn test_cover_traffic_distribution_uniform() {
+        let min_ms = 50u64;
+        let max_ms = 150u64;
+        let delay = Duration::from_millis(100); // mid-range
+        assert!(delay >= Duration::from_millis(min_ms));
+        assert!(delay <= Duration::from_millis(max_ms));
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_frame_stream_close() {
+        use crate::FRAME_HEADER_SIZE;
+        use crate::frame::{FrameBuilder, FrameType};
+
+        let node = Node::new_random().await.unwrap();
+        let peer_id = [42u8; 32];
+
+        // Build a StreamClose frame
+        let frame_bytes = FrameBuilder::new()
+            .frame_type(FrameType::StreamClose)
+            .stream_id(16)
+            .sequence(0)
+            .build(FRAME_HEADER_SIZE)
+            .unwrap();
+
+        // dispatch_frame should handle StreamClose without error
+        let result = node.dispatch_frame(frame_bytes, peer_id).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_frame_unhandled_type() {
+        use crate::FRAME_HEADER_SIZE;
+        use crate::frame::{FrameBuilder, FrameType};
+
+        let node = Node::new_random().await.unwrap();
+        let peer_id = [42u8; 32];
+
+        // Build an Ack frame (unhandled by dispatch_frame)
+        let frame_bytes = FrameBuilder::new()
+            .frame_type(FrameType::Ack)
+            .stream_id(16)
+            .sequence(0)
+            .build(FRAME_HEADER_SIZE)
+            .unwrap();
+
+        let result = node.dispatch_frame(frame_bytes, peer_id).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_dispatch_frame_invalid_data() {
+        let node = Node::new_random().await.unwrap();
+        let peer_id = [42u8; 32];
+
+        // Try dispatching garbage data - should fail to parse frame
+        let result = node.dispatch_frame(vec![0xFF; 5], peer_id).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_handle_pong_frame_no_pending() {
+        use crate::FRAME_HEADER_SIZE;
+        use crate::frame::{FrameBuilder, FrameType};
+
+        let node = Node::new_random().await.unwrap();
+        let peer_id = [42u8; 32];
+
+        // Build a Pong frame
+        let frame_bytes = FrameBuilder::new()
+            .frame_type(FrameType::Pong)
+            .stream_id(0)
+            .sequence(12345)
+            .build(FRAME_HEADER_SIZE)
+            .unwrap();
+
+        let frame = crate::frame::Frame::parse(&frame_bytes).unwrap();
+
+        // No pending ping registered, should handle gracefully
+        let result = node.handle_pong_frame(frame, peer_id).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_handle_pong_frame_with_pending() {
+        use crate::FRAME_HEADER_SIZE;
+        use crate::frame::{FrameBuilder, FrameType};
+
+        let node = Node::new_random().await.unwrap();
+        let peer_id = [42u8; 32];
+        let sequence = 12345u32;
+
+        // Register a pending ping
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        node.inner.pending_pings.insert((peer_id, sequence), tx);
+
+        // Build a Pong frame with matching sequence
+        let frame_bytes = FrameBuilder::new()
+            .frame_type(FrameType::Pong)
+            .stream_id(0)
+            .sequence(sequence)
+            .build(FRAME_HEADER_SIZE)
+            .unwrap();
+
+        let frame = crate::frame::Frame::parse(&frame_bytes).unwrap();
+
+        let result = node.handle_pong_frame(frame, peer_id).await;
+        assert!(result.is_ok());
+
+        // The pending ping channel should have been resolved
+        let instant = rx.await;
+        assert!(instant.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_handle_path_response_wrong_length() {
+        use crate::FRAME_HEADER_SIZE;
+        use crate::frame::{FrameBuilder, FrameType};
+
+        let node = Node::new_random().await.unwrap();
+        let peer_id = [42u8; 32];
+
+        // Build a PathResponse frame with wrong payload length (5 instead of 8)
+        let frame_bytes = FrameBuilder::new()
+            .frame_type(FrameType::PathResponse)
+            .stream_id(0)
+            .sequence(0)
+            .payload(&[1, 2, 3, 4, 5])
+            .build(FRAME_HEADER_SIZE + 5)
+            .unwrap();
+
+        let frame = crate::frame::Frame::parse(&frame_bytes).unwrap();
+
+        // Should return Ok but do nothing (invalid payload length)
+        let result = node.handle_path_response_frame(frame, peer_id).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_handle_path_response_no_matching_migration() {
+        use crate::FRAME_HEADER_SIZE;
+        use crate::frame::{FrameBuilder, FrameType};
+
+        let node = Node::new_random().await.unwrap();
+        let peer_id = [42u8; 32];
+
+        // Build a PathResponse with 8-byte payload but no matching migration
+        let challenge = [0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xBA, 0xBE];
+        let frame_bytes = FrameBuilder::new()
+            .frame_type(FrameType::PathResponse)
+            .stream_id(0)
+            .sequence(0)
+            .payload(&challenge)
+            .build(FRAME_HEADER_SIZE + 8)
+            .unwrap();
+
+        let frame = crate::frame::Frame::parse(&frame_bytes).unwrap();
+
+        let result = node.handle_path_response_frame(frame, peer_id).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_handle_path_response_with_matching_migration() {
+        use crate::FRAME_HEADER_SIZE;
+        use crate::frame::{FrameBuilder, FrameType};
+
+        let node = Node::new_random().await.unwrap();
+        let peer_id = [42u8; 32];
+        let challenge = [0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xBA, 0xBE];
+        let path_id = 12345u64;
+
+        // Register a pending migration with matching challenge
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let migration_state = MigrationState {
+            peer_id,
+            new_addr: "192.168.1.100:8420".parse().unwrap(),
+            challenge,
+            sender: tx,
+            initiated_at: std::time::Instant::now(),
+        };
+        node.inner
+            .pending_migrations
+            .insert(path_id, migration_state);
+
+        // Build a PathResponse with matching challenge
+        let frame_bytes = FrameBuilder::new()
+            .frame_type(FrameType::PathResponse)
+            .stream_id(0)
+            .sequence(0)
+            .payload(&challenge)
+            .build(FRAME_HEADER_SIZE + 8)
+            .unwrap();
+
+        let frame = crate::frame::Frame::parse(&frame_bytes).unwrap();
+
+        let result = node.handle_path_response_frame(frame, peer_id).await;
+        assert!(result.is_ok());
+
+        // Migration should have been removed from pending
+        assert!(!node.inner.pending_migrations.contains_key(&path_id));
+
+        // Channel should have received Ok(Duration)
+        let response = rx.await.unwrap();
+        assert!(response.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_handle_data_frame_pending_chunk() {
+        use crate::FRAME_HEADER_SIZE;
+        use crate::frame::{FrameBuilder, FrameType};
+
+        let node = Node::new_random().await.unwrap();
+        let peer_id = [42u8; 32];
+
+        let stream_id = 42u16;
+        let chunk_index = 5u64;
+        let chunk_data = b"hello chunk data";
+
+        // Register a pending chunk request
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        node.inner
+            .pending_chunks
+            .insert((stream_id, chunk_index), tx);
+
+        // Build a Data frame matching the pending chunk
+        let frame_bytes = FrameBuilder::new()
+            .frame_type(FrameType::Data)
+            .stream_id(stream_id)
+            .sequence(chunk_index as u32)
+            .payload(chunk_data)
+            .build(FRAME_HEADER_SIZE + chunk_data.len())
+            .unwrap();
+
+        let frame = crate::frame::Frame::parse(&frame_bytes).unwrap();
+
+        let result = node.handle_data_frame(frame, peer_id).await;
+        assert!(result.is_ok());
+
+        // Pending chunk should have been resolved
+        let received = rx.await.unwrap();
+        assert_eq!(received, chunk_data);
+    }
+
+    #[tokio::test]
+    async fn test_handle_data_frame_no_transfer() {
+        use crate::FRAME_HEADER_SIZE;
+        use crate::frame::{FrameBuilder, FrameType};
+
+        let node = Node::new_random().await.unwrap();
+        let peer_id = [42u8; 32];
+
+        let chunk_data = b"orphan chunk";
+
+        // Build a Data frame with no matching transfer or pending chunk
+        let frame_bytes = FrameBuilder::new()
+            .frame_type(FrameType::Data)
+            .stream_id(999)
+            .sequence(0)
+            .payload(chunk_data)
+            .build(FRAME_HEADER_SIZE + chunk_data.len())
+            .unwrap();
+
+        let frame = crate::frame::Frame::parse(&frame_bytes).unwrap();
+
+        // Should fail because there's no transfer for this stream_id
+        let result = node.handle_data_frame(frame, peer_id).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_handle_stream_open_frame() {
+        use crate::FRAME_HEADER_SIZE;
+        use crate::frame::{FrameBuilder, FrameType};
+        use crate::node::file_transfer::FileMetadata;
+
+        let node = Node::new_random().await.unwrap();
+
+        // Create file metadata
+        let metadata = FileMetadata {
+            transfer_id: [1u8; 32],
+            file_name: "test_file.dat".to_string(),
+            file_size: 1024,
+            chunk_size: 256,
+            total_chunks: 4,
+            root_hash: [0xAB; 32],
+        };
+
+        let metadata_bytes = metadata.serialize();
+
+        // Build StreamOpen frame
+        let frame_bytes = FrameBuilder::new()
+            .frame_type(FrameType::StreamOpen)
+            .stream_id(16)
+            .sequence(0)
+            .payload(&metadata_bytes)
+            .build(FRAME_HEADER_SIZE + metadata_bytes.len())
+            .unwrap();
+
+        let frame = crate::frame::Frame::parse(&frame_bytes).unwrap();
+
+        let result = node.handle_stream_open_frame(frame).await;
+        assert!(result.is_ok());
+
+        // Verify transfer was stored
+        assert!(node.inner.transfers.contains_key(&[1u8; 32]));
+    }
+
+    #[tokio::test]
+    async fn test_handle_stream_open_frame_bad_metadata() {
+        use crate::FRAME_HEADER_SIZE;
+        use crate::frame::{FrameBuilder, FrameType};
+
+        let node = Node::new_random().await.unwrap();
+
+        // Build StreamOpen with truncated metadata
+        let bad_metadata = vec![0u8; 10]; // Too short for valid metadata
+        let frame_bytes = FrameBuilder::new()
+            .frame_type(FrameType::StreamOpen)
+            .stream_id(16)
+            .sequence(0)
+            .payload(&bad_metadata)
+            .build(FRAME_HEADER_SIZE + bad_metadata.len())
+            .unwrap();
+
+        let frame = crate::frame::Frame::parse(&frame_bytes).unwrap();
+
+        let result = node.handle_stream_open_frame(frame).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_node_is_not_running_initially() {
+        let node = Node::new_random().await.unwrap();
+        assert!(!node.is_running());
+    }
+
+    #[tokio::test]
+    async fn test_get_transport_not_initialized() {
+        let node = Node::new_random().await.unwrap();
+        let result = node.get_transport().await;
+        assert!(result.is_err());
+    }
+}

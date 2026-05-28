@@ -1,0 +1,46 @@
+[package]
+name = "wraith-core"
+description = "Core protocol implementation for WRAITH - frame encoding, session state machine, congestion control"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[features]
+default = ["simd"]
+simd = []
+
+[dependencies]
+wraith-crypto = { workspace = true }
+wraith-files = { workspace = true }
+wraith-transport = { workspace = true }
+wraith-discovery = { workspace = true }
+wraith-obfuscation = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+zeroize = { workspace = true }
+getrandom = { workspace = true }
+tokio = { workspace = true }
+rand_core = { workspace = true }
+rand = { workspace = true }
+rand_distr = { workspace = true }
+hex = { workspace = true }
+blake3 = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+dashmap = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+criterion = { workspace = true }
+tempfile = "3.8"
+
+[[bench]]
+name = "frame_bench"
+harness = false
+
+[[bench]]
+name = "transfer_bench"
+harness = false
