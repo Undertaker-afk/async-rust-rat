@@ -1,0 +1,46 @@
+[package]
+name = "wraith-crypto"
+version = "2.3.7"
+description = "WRAITH Protocol Cryptography"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[features]
+default = []
+key-commitment = []
+pq-signatures = ["dep:ml-dsa", "dep:signature"]
+
+[dependencies]
+chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
+x25519-dalek = { version = "2.0", default-features = false, features = ["static_secrets", "zeroize"] }
+ed25519-dalek = { version = "2.1", default-features = false, features = ["alloc", "rand_core", "zeroize"] }
+blake3 = { version = "1.5", default-features = false }
+snow = { version = "0.10", default-features = false, features = ["default-resolver", "default-resolver-crypto"] }
+rand_core = { version = "0.6", default-features = false, features = ["getrandom"] }
+zeroize = { version = "1.7", default-features = false, features = ["alloc", "derive"] }
+getrandom = { version = "0.2", default-features = false }
+thiserror = { version = "2.0", default-features = false }
+argon2 = { version = "0.5", default-features = false, features = ["alloc"] }
+serde = { version = "1.0", default-features = false, features = ["derive", "alloc"] }
+subtle = { version = "2.5", default-features = false }
+curve25519-elligator2 = { version = "0.1.0-alpha.2", features = ["elligator2"], default-features = false }
+ml-kem = { version = "0.2.2", default-features = false }
+kem = "0.3.0-pre.0"
+ml-dsa = { version = "0.1.0-rc.5", default-features = false, features = ["alloc", "rand_core"], optional = true }
+signature = { version = "3.0.0-rc.9", default-features = false, optional = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+criterion = { workspace = true }
+rand = "0.8"
+
+[lints.rust]
+# Allow 'coverage' cfg set by cargo-llvm-cov for conditional test exclusion
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage)', 'cfg(feature, values("key-commitment", "pq-signatures"))'] }
+
+[[bench]]
+name = "crypto_bench"
+harness = false

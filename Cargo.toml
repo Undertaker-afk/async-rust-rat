@@ -2,6 +2,12 @@
 members = ["server/src-tauri", "client", "common"]
 resolver = "2"
 
+[workspace.dependencies]
+wraith-core = { path = "common/wraith/core" }
+wraith-transport = { path = "common/wraith/transport" }
+wraith-crypto = { path = "common/wraith/crypto" }
+wraith-discovery = { path = "common/wraith/discovery" }
+
 [profile.release]
 strip = true
 opt-level = "z"

@@ -22,6 +22,7 @@ pub struct ClientData {
     pub disconnected: Option<bool>,
     pub group: String,
     pub country_code: String,
+    pub wraith_id: Option<[u8; 32]>,
 }
 
 impl ClientData {
@@ -33,6 +34,7 @@ impl ClientData {
             disconnected: None,
             group,
             country_code: "N/A".to_string(),
+            wraith_id: None,
         }
     }
 }

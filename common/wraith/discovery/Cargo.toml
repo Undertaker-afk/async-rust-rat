@@ -1,0 +1,30 @@
+[package]
+name = "wraith-discovery"
+description = "Peer discovery for WRAITH - privacy-enhanced DHT, relay, NAT traversal"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+wraith-crypto = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+blake3 = { workspace = true }
+rand = { workspace = true }
+serde = { workspace = true }
+bincode = { workspace = true }
+zeroize = { workspace = true }
+base64 = { workspace = true }
+hmac = "0.12"
+sha1 = "0.10"
+md-5 = "0.10"
+
+# DNS resolution for STUN servers
+hickory-resolver = "0.25"
+
+[dev-dependencies]
+proptest = { workspace = true }

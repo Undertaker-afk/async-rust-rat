@@ -16,6 +16,7 @@ pub struct TauriState {
     server_task: Option<tokio::task::JoinHandle<()>>,
     listener_task: Option<tokio::task::JoinHandle<()>>,
     pub tor_manager: Option<Arc<TorManager>>,
+    pub wraith_node: Option<wraith_core::Node>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,6 +40,7 @@ impl Default for TauriState {
             server_task: None,
             listener_task: None,
             tor_manager: None,
+            wraith_node: None,
         }
     }
 }

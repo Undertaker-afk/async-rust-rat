@@ -1,0 +1,36 @@
+[package]
+name = "wraith-transport"
+description = "Network transport layer for WRAITH - UDP, TCP, WebSocket, QUIC, AF_XDP, io_uring"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+tokio = { workspace = true }
+socket2 = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+async-trait = "0.1"
+crossbeam-channel = "0.5"
+crossbeam-queue = { workspace = true }
+num_cpus = "1.16"
+libc = "0.2"
+
+# QUIC transport
+quinn = "0.11"
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+rcgen = "0.13"
+
+# WebSocket transport
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+
+# Linux-only dependencies for kernel bypass (AF_XDP, io_uring)
+[target.'cfg(target_os = "linux")'.dependencies]
+io-uring = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
