@@ -58,3 +58,4 @@ server/src-tauri/icons/old
 server/src-tauri/icons/old2
 
 .tauri_installer_assets_staging/wraith-protocol/
+.tauri_installer_assets_staging/
