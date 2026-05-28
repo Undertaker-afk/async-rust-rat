@@ -17,7 +17,6 @@ pub enum ClientCommand {
 }
 
 /// Commands sent to server-client connection handlers.
-#[derive(Debug)]
 pub enum ServerCommand {
     EncryptionRequest(Sender<ClientCommand>, OSender<Vec<u8>>),
     EncryptionConfirm(

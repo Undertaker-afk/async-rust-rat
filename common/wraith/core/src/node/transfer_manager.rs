@@ -269,8 +269,12 @@ impl TransferManager {
             }
 
             // Build chunk frame
-            let chunk_frame =
-                crate::node::file_transfer::build_chunk_frame(stream_id, chunk_index, &chunk_data)?;
+            let chunk_frame = crate::node::file_transfer::build_chunk_frame(
+                stream_id,
+                chunk_index,
+                &chunk_data,
+                self.chunk_size,
+            )?;
 
             // Send encrypted frame
             send_frame_fn(Arc::clone(&connection), chunk_frame).await?;

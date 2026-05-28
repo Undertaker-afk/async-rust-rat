@@ -38,6 +38,7 @@ rusqlite = { version = "0.36.0", features = ["bundled"] }
 reqwest = { version = "0.12", features = ["json", "multipart"] }
 tauri-plugin-fs = "2"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+wraith-core = { workspace = true }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

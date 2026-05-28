@@ -178,21 +178,25 @@ pub async fn stop_server(
     )
     .await?;
 
-    {
+    let (listener_task, wraith_node) = {
         let mut tauri_state = tauri_state.0.lock().unwrap();
 
-        if let Some(listener_task) = tauri_state.listener_task.take() {
-            listener_task.abort();
-        }
-
-        if let Some(wraith_node) = tauri_state.wraith_node.take() {
-            let _ = wraith_node.stop().await;
-        }
-
+        let listener_task = tauri_state.listener_task.take();
+        let wraith_node = tauri_state.wraith_node.take();
         tauri_state.channel_tx = OnceCell::new();
         tauri_state.server_task = None;
         tauri_state.listener_task = None;
         tauri_state.running = false;
+
+        (listener_task, wraith_node)
+    };
+
+    if let Some(listener_task) = listener_task {
+        listener_task.abort();
+    }
+
+    if let Some(wraith_node) = wraith_node {
+        let _ = wraith_node.stop().await;
     }
 
     Ok("true".to_string())

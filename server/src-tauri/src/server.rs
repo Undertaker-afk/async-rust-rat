@@ -281,8 +281,6 @@ impl ServerWrapper {
                         .await;
                 }
 
-                }
-
                 RegisterClient(tx, addr, mut client_info) => {
                     self.txs.insert(addr, tx);
                     if let Some(wraith_id) = client_info.data.wraith_id {
