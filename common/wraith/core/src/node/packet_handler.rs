@@ -377,18 +377,44 @@ impl Node {
             metadata.file_size
         );
 
+        // Sanitize file name to prevent directory traversal attacks
+        if metadata.file_name.is_empty() {
+            return Err(NodeError::InvalidState("Empty file name not allowed".into()));
+        }
+
+        let file_path = std::path::Path::new(&metadata.file_name);
+
+        // Reject absolute paths
+        if file_path.is_absolute() {
+            return Err(NodeError::InvalidState("Absolute paths not allowed".into()));
+        }
+
+        // Extract only the file name component (strip any directory parts)
+        let safe_file_name = file_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| NodeError::InvalidState("Invalid file name".into()))?;
+
+        // Reject filenames with path components or parent references
+        if safe_file_name.contains("..") || safe_file_name.contains('/') || safe_file_name.contains('\\') {
+            return Err(NodeError::InvalidState("File name contains invalid characters".into()));
+        }
+
+        // Build safe path in the current directory (or a designated receive directory)
+        let safe_path = std::path::PathBuf::from(safe_file_name);
+
         // Create receive transfer session
         let mut transfer = TransferSession::new_receive(
             metadata.transfer_id,
-            std::path::PathBuf::from(&metadata.file_name),
+            safe_path.clone(),
             metadata.file_size,
             metadata.chunk_size as usize,
         );
         transfer.start();
 
-        // Create file reassembler
+        // Create file reassembler with sanitized path
         let reassembler = wraith_files::chunker::FileReassembler::new(
-            &metadata.file_name,
+            safe_file_name,
             metadata.file_size,
             metadata.chunk_size as usize,
         )
@@ -618,7 +644,7 @@ impl Node {
 
             // Build and send chunk frame
             let chunk_frame =
-                crate::node::file_transfer::build_chunk_frame(stream_id, chunk_index, &chunk_data)?;
+                crate::node::file_transfer::build_chunk_frame(stream_id, chunk_index, &chunk_data, self.inner.config.transfer.chunk_size)?;
 
             self.send_encrypted_frame(&connection, &chunk_frame).await?;
 
@@ -930,6 +956,7 @@ mod tests {
         use crate::frame::{FrameBuilder, FrameType};
 
         let node = Node::new_random().await.unwrap();
+        let peer_id = [42u8; 32];
 
         let stream_id = 42u16;
         let chunk_index = 5u64;
@@ -952,7 +979,7 @@ mod tests {
 
         let frame = crate::frame::Frame::parse(&frame_bytes).unwrap();
 
-        let result = node.handle_data_frame(frame).await;
+        let result = node.handle_data_frame(frame, peer_id).await;
         assert!(result.is_ok());
 
         // Pending chunk should have been resolved
@@ -966,6 +993,7 @@ mod tests {
         use crate::frame::{FrameBuilder, FrameType};
 
         let node = Node::new_random().await.unwrap();
+        let peer_id = [42u8; 32];
 
         let chunk_data = b"orphan chunk";
 
@@ -981,7 +1009,7 @@ mod tests {
         let frame = crate::frame::Frame::parse(&frame_bytes).unwrap();
 
         // Should fail because there's no transfer for this stream_id
-        let result = node.handle_data_frame(frame).await;
+        let result = node.handle_data_frame(frame, peer_id).await;
         assert!(result.is_err());
     }
 

@@ -241,7 +241,7 @@ pub fn build_metadata_frame(stream_id: u16, metadata: &FileMetadata) -> Result<V
 }
 
 /// Build a data frame for file chunk
-pub fn build_chunk_frame(stream_id: u16, chunk_index: u64, chunk_data: &[u8]) -> Result<Vec<u8>> {
+pub fn build_chunk_frame(stream_id: u16, chunk_index: u64, chunk_data: &[u8], chunk_size: usize) -> Result<Vec<u8>> {
     let frame_size = FRAME_HEADER_SIZE + chunk_data.len();
 
     // Use chunk_index as sequence number
@@ -251,7 +251,7 @@ pub fn build_chunk_frame(stream_id: u16, chunk_index: u64, chunk_data: &[u8]) ->
         .frame_type(FrameType::Data)
         .stream_id(stream_id)
         .sequence(sequence)
-        .offset(chunk_index * chunk_data.len() as u64) // File offset
+        .offset(chunk_index * chunk_size as u64) // File offset using configured chunk size
         .payload(chunk_data)
         .build(frame_size)
         .map_err(|e| NodeError::InvalidState(format!("Failed to build chunk frame: {e}").into()))
@@ -335,8 +335,9 @@ mod tests {
     fn test_build_chunk_frame() {
         let chunk_data = vec![0xAB; 1024];
         let chunk_index = 5;
+        let chunk_size = 1024;
 
-        let frame_bytes = build_chunk_frame(100, chunk_index, &chunk_data).unwrap();
+        let frame_bytes = build_chunk_frame(100, chunk_index, &chunk_data, chunk_size).unwrap();
 
         // Verify frame
         let frame = crate::frame::Frame::parse(&frame_bytes).unwrap();

@@ -233,11 +233,12 @@ impl MultiPeerCoordinator {
 
     /// Remove a peer from the coordinator
     pub async fn remove_peer(&self, peer_id: &[u8; 32]) {
+        // Lock order: always acquire peers before assignments to prevent deadlock
         let mut peers = self.peers.write().await;
-        peers.remove(peer_id);
-
-        // Reassign chunks from removed peer
         let mut assignments = self.assignments.write().await;
+
+        peers.remove(peer_id);
+        // Reassign chunks from removed peer
         assignments.retain(|_, assigned_peer| assigned_peer != peer_id);
     }
 
@@ -324,11 +325,12 @@ impl MultiPeerCoordinator {
 
     /// Reassign a chunk on failure
     pub async fn reassign_chunk(&self, chunk_index: usize) -> Option<[u8; 32]> {
-        // Remove old assignment
+        // Lock order: always acquire peers before assignments to prevent deadlock
         {
+            let mut peers = self.peers.write().await;
             let mut assignments = self.assignments.write().await;
+
             if let Some(old_peer) = assignments.remove(&chunk_index) {
-                let mut peers = self.peers.write().await;
                 if let Some(peer) = peers.get_mut(&old_peer) {
                     peer.record_failure();
                 }

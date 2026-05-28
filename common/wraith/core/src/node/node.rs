@@ -203,6 +203,7 @@ impl Node {
             doh_tunnel: Arc::new(doh_tunnel),
             obfuscation_stats: Arc::new(Mutex::new(obfuscation_stats)),
             available_files: Arc::new(DashMap::new()),
+            data_subscribers: Arc::new(DashMap::new()),
         };
         Ok(Self {
             inner: Arc::new(inner),
@@ -751,7 +752,7 @@ impl Node {
         let context = Arc::new(FileTransferContext::new_send(
             transfer_id,
             Arc::new(tokio::sync::RwLock::new(transfer_session)),
-            tree_hash,
+            tree_hash.clone(),
         ));
         self.inner.transfers.insert(transfer_id, context.clone());
 
@@ -784,6 +785,25 @@ impl Node {
             sessions.len(),
             peer_ids.len()
         );
+
+        // Send StreamOpen metadata to all peers before starting upload
+        let stream_id = ((transfer_id[0] as u16) << 8) | (transfer_id[1] as u16);
+        let metadata = crate::node::file_transfer::FileMetadata::from_path_and_hash(
+            transfer_id,
+            file_path,
+            file_size,
+            chunk_size,
+            &tree_hash,
+        )?;
+        let metadata_frame =
+            crate::node::file_transfer::build_metadata_frame(stream_id, &metadata)?;
+
+        // Send metadata to all sessions
+        for (_peer_id, session) in &sessions {
+            if let Err(e) = self.send_encrypted_frame(session, &metadata_frame).await {
+                tracing::warn!("Failed to send metadata to peer: {}", e);
+            }
+        }
 
         // Spawn task to coordinate chunk uploads
         let node = self.clone();
@@ -851,6 +871,7 @@ impl Node {
                     stream_id,
                     chunk_index,
                     &chunk_data,
+                    chunk_size,
                 )?;
 
                 let start = Instant::now();
