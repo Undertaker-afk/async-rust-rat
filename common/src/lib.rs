@@ -31,4 +31,5 @@ pub struct ClientConfig {
 
     pub use_tor: bool,
     pub tor_address: String,
+    pub use_wraith: bool,
 }

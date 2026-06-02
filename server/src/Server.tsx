@@ -10,7 +10,7 @@ export const Server: React.FC = () => {
   const navigate = useNavigate();
 
   async function startServer() {
-    let serverMessage = await startServerCmd(port);
+    let serverMessage = await startServerCmd(port, true);
 
     if (serverMessage === "true") {
       toast.success("Server started successfully!", {

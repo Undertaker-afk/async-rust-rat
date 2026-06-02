@@ -55,7 +55,7 @@ export const Layout = () => {
     useContext(RATContext)!;
 
   async function startServer() {
-    let serverMessage = await startServerCmd(port);
+    let serverMessage = await startServerCmd(port, true);
 
     if (serverMessage === "true") {
       toast.success("Server started successfully!", {

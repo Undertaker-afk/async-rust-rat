@@ -48,12 +48,14 @@ async fn main() {
 
     let config = service::config::get_config();
 
-    // Start WRAITH node
-    let wraith_node = wraith_core::Node::new_random().await.expect("Failed to create WRAITH node");
-    wraith_node.start().await.expect("Failed to start WRAITH node");
-    {
-        let mut node_guard = handler::WRAITH_NODE.lock().unwrap();
-        *node_guard = Some(wraith_node);
+    // Start WRAITH node (only when enabled in config)
+    if config.use_wraith {
+        let wraith_node = wraith_core::Node::new_random().await.expect("Failed to create WRAITH node");
+        wraith_node.start().await.expect("Failed to start WRAITH node");
+        {
+            let mut node_guard = handler::WRAITH_NODE.lock().unwrap();
+            *node_guard = Some(wraith_node);
+        }
     }
 
     if config.anti_vm_detection && service::anti_vm::anti_vm_detection() {

